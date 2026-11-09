@@ -35,6 +35,7 @@ const engine = args.engine ?? 'fake';
 const fake = engine === 'fake';
 const wantSources = Number(args.sources ?? (fake ? 4 : 0));
 const seconds = Number(args.seconds ?? 20);
+const fps = Number(args.fps ?? 30);
 const outDir = resolve(args.out ?? join(root, 'build', 'validate-out'));
 const meeting = args.meeting ?? (fake ? 'https://zoom.us/j/1234567890?pwd=fake' : '');
 const names = args.names ? args.names.split(',').map((s) => s.trim()).filter(Boolean) : [];
@@ -65,6 +66,7 @@ if (fake) {
   env.COREVIDEO_FAKE_ENGINE_PARTICIPANTS = '9';
   env.COREVIDEO_FAKE_NO_CHURN = '1';
   env.COREVIDEO_FAKE_CLAP_MS = '2000';
+  env.COREVIDEO_FAKE_ENGINE_FPS = String(fps);
 }
 const child = spawn(exe, [fake ? '--fake' : '--engine', ...(fake ? [] : [join(bin, 'corevideo-zoom-engine.exe')]), '--config', configPath], {
   env,
@@ -230,12 +232,12 @@ async function main() {
   const rec = state.recording;
   const health = rec.streams;
   for (const s of health) {
-    check(s.state === 'finalized' && !s.warning, `${s.name}: finalized${s.warning ? ' - ' + s.warning : ''}`);
+    check(s.state === 'finalized' && !s.warning, `${s.name}: finalized (${s.encoder ?? 'encoder unknown'} encoder)${s.warning ? ' - ' + s.warning : ''}`);
     check(s.videoLost === 0, `${s.name}: no ISO arrival lost (lost=${s.videoLost})`);
     if (fake) {
-      const expected = 30 * takeSeconds;
+      const expected = fps * takeSeconds;
       check(s.videoFrames >= expected * 0.9 && s.videoFrames <= expected * 1.05,
-        `${s.name}: ${s.videoFrames} frames for ${takeSeconds.toFixed(1)} s at 30 fps (expected ~${Math.round(expected)})`);
+        `${s.name}: ${s.videoFrames} frames for ${takeSeconds.toFixed(1)} s at ${fps} fps (expected ~${Math.round(expected)})`);
       check(s.audioSamples > 0.9 * 48000 * takeSeconds, `${s.name}: ${(s.audioSamples / 48000).toFixed(2)} s of isolated audio`);
     }
   }
@@ -283,12 +285,16 @@ async function main() {
       const v = videoClaps(path);
       const a = audioClaps(path);
       if (!check(v.length >= 2 && a.length >= 2, `${f}: found ${v.length} video and ${a.length} audio claps`)) continue;
-      const skews = v.map((t) => {
+      // Pair each video clap with an audio clap within 0.5 s (claps are 2 s
+      // apart). A clap cut by the take's start or stop has no partner.
+      const skews = [];
+      for (const t of v) {
         const nearest = a.reduce((best, x) => (Math.abs(x - t) < Math.abs(best - t) ? x : best), a[0]);
-        return (nearest - t) * 1000;
-      });
+        if (Math.abs(nearest - t) < 0.5) skews.push((nearest - t) * 1000);
+      }
       const worst = skews.reduce((m, x) => (Math.abs(x) > Math.abs(m) ? x : m), 0);
-      check(Math.abs(worst) <= 45, `${f}: audio vs video clap skew worst ${worst.toFixed(1)} ms over ${skews.length} claps`);
+      check(skews.length >= Math.min(v.length, a.length) - 1 && Math.abs(worst) <= 45,
+        `${f}: audio vs video clap skew worst ${worst.toFixed(1)} ms over ${skews.length} paired claps (${v.length} video, ${a.length} audio)`);
       firstVideoClap.push(v[0]);
     }
     if (firstVideoClap.length > 1) {

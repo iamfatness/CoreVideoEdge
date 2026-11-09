@@ -1,0 +1,9 @@
+{
+  "displayName": "CoreVideo Edge - EDGE-01",
+  "recordFolder": "D:\\EdgeISO",
+  "filePrefix": "edge01",
+  "maxSubscriptions": 6,
+  "subscribe": ["Guest Name One", "Guest Name Two"],
+  "videoBitrateMbps": 18,
+  "hardwareEncode": true
+}

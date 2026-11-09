@@ -14,3 +14,4 @@ local.env
 config/edge.json
 # Recordings
 *.mp4
+/dist/

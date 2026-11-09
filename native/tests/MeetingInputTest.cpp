@@ -33,3 +33,14 @@ TEST(MeetingInput, RefusesWhatIsNotAMeeting) {
   EXPECT_FALSE(parseMeetingInput("12345").ok());
   EXPECT_FALSE(parseMeetingInput("https://zoom.us/meeting/schedule").ok());
 }
+
+#include "edge/JoinFailureText.h"
+
+TEST(JoinFailureText, CommonMeetingFailuresReadAsOperatorLanguage) {
+  using corevideo::edge::joinFailureText;
+  EXPECT_EQ(joinFailureText("meeting_failed: MEETING_FAIL_MEETING_NOT_EXIST"),
+            std::string("Zoom says that meeting does not exist. Check the meeting link."));
+  EXPECT_TRUE(joinFailureText("join_failed: account-busy-elsewhere").find("already in this meeting") != std::string::npos);
+  // Unknown codes pass through verbatim, never a vague sentence.
+  EXPECT_EQ(joinFailureText("meeting_failed: MEETING_FAIL_SOMETHING_NEW"), std::string("meeting_failed: MEETING_FAIL_SOMETHING_NEW"));
+}

@@ -1,5 +1,5 @@
 // ============================================================================
-// CoreVideo Pro â€” SYNTHETIC Zoom capture engine (a fake `corevideo-zoom-engine`)
+// CoreVideo Pro — SYNTHETIC Zoom capture engine (a fake `corevideo-zoom-engine`)
 // ----------------------------------------------------------------------------
 // This executable speaks the EXACT same named-pipe + shared-memory IPC protocol
 // as the real Zoom engine (native/zoom-engine/engine/main.cpp), but contains NO
@@ -8,18 +8,18 @@
 // real Zoom call.
 //
 // What it does, mirroring the real engine's wire shapes:
-//   â€¢ Creates the two named pipes (P2E inbound, E2P outbound) and waits for the
-//     core to connect â€” exactly like main.cpp's ipc_setup().
-//   â€¢ Emits {"cmd":"ready"} on connect.
-//   â€¢ On `init`  â†’ emits {"cmd":"auth_ok"}.
-//   â€¢ On `join`  â†’ emits {"cmd":"joined"} then a {"cmd":"participants",...}
+//   • Creates the two named pipes (P2E inbound, E2P outbound) and waits for the
+//     core to connect — exactly like main.cpp's ipc_setup().
+//   • Emits {"cmd":"ready"} on connect.
+//   • On `init`  → emits {"cmd":"auth_ok"}.
+//   • On `join`  → emits {"cmd":"joined"} then a {"cmd":"participants",...}
 //                  roster with 3 participants (numeric ids, has_video=true,
 //                  names "mv1","mv2","Producer").
-//   â€¢ On `subscribe` (mode != screenshare) â†’ starts writing synthetic I420
+//   • On `subscribe` (mode != screenshare) → starts writing synthetic I420
 //     frames to that source's shared-memory region at ~30 fps and emits the
 //     matching {"cmd":"frame",...} events with the exact JSON shape the core
 //     expects (source_uuid, participant_id, w, h).
-//   â€¢ Churn (this is what fail-fasts the WinUI):
+//   • Churn (this is what fail-fasts the WinUI):
 //       - every ~2s rotates the active_speaker,
 //       - every ~10s a 4th participant ("mv4") leaves + re-joins so the roster
 //         oscillates 3 <-> 4, driving multiview tile add/remove churn.
@@ -71,7 +71,7 @@
 #include <thread>
 #include <vector>
 
-// â”€â”€ Standalone diagnostic log (independent of the core's media-core.log) â”€â”€â”€â”€â”€â”€
+// ── Standalone diagnostic log (independent of the core's media-core.log) ──────
 static void diag(const std::string& line) {
     const char* path = std::getenv("COREVIDEO_FAKE_ENGINE_LOG");
     if (!path || !*path) return;
@@ -79,7 +79,7 @@ static void diag(const std::string& line) {
     if (out) out << line << "\n";
 }
 
-// â”€â”€ Minimal JSON field extraction (matches main.cpp's helpers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Minimal JSON field extraction (matches main.cpp's helpers) ───────────────
 static std::string json_str(const std::string& json, const std::string& key) {
     const std::string needle = "\"" + key + "\":\"";
     auto pos = json.find(needle);
@@ -120,7 +120,7 @@ static std::string json_escape(const std::string& in) {
     return out;
 }
 
-// â”€â”€ Platform pipe setup (mirrors main.cpp; no message pump needed â€” no COM) â”€â”€â”€
+// ── Platform pipe setup (mirrors main.cpp; no message pump needed — no COM) ───
 #if defined(WIN32)
 static bool ipc_connect_blocking(HANDLE pipe) {
     BOOL ok = ConnectNamedPipe(pipe, nullptr);
@@ -128,7 +128,7 @@ static bool ipc_connect_blocking(HANDLE pipe) {
 }
 
 static bool ipc_setup(IpcFd& p2e, IpcFd& e2p, const std::string& token) {
-    // Engine CREATES the pipes (server) and the core CONNECTS (client) â€” this is
+    // Engine CREATES the pipes (server) and the core CONNECTS (client) — this is
     // the same ownership split as the real engine.
     p2e = CreateNamedPipeA(ipc_pipe_p2e(token).c_str(), PIPE_ACCESS_INBOUND,
                            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
@@ -177,7 +177,7 @@ static void ipc_teardown(IpcFd p2e, IpcFd e2p, const std::string& token) {
 }
 #endif
 
-// â”€â”€ Resolution â†’ dimensions (0=360p, 1=720p, 2=1080p) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Resolution → dimensions (0=360p, 1=720p, 2=1080p) ────────────────────────
 static void res_to_dims(uint32_t res, uint32_t& w, uint32_t& h) {
     switch (res) {
     case 0: w = 640;  h = 360;  break;
@@ -187,7 +187,7 @@ static void res_to_dims(uint32_t res, uint32_t& w, uint32_t& h) {
     }
 }
 
-// â”€â”€ Synthetic meeting state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Synthetic meeting state ──────────────────────────────────────────────────
 struct Participant {
     uint32_t id = 0;
     std::string name;
@@ -205,7 +205,7 @@ struct Target {
     bool is_auto = false;  // created by auto-subscribe vs explicit `subscribe`
     // Precomputed luma plane. Generating the gradient per pixel per frame costs
     // ~2M integer divides per 1080p frame, which capped the rig at ~23fps/source
-    // with 10 sources â€” the PRODUCER, not the core, was the bottleneck, so a
+    // with 10 sources — the PRODUCER, not the core, was the bottleneck, so a
     // 1080p60 load could not actually be delivered. The real engine memcpys an
     // already-decoded I420 frame into SHM, so a cached plane + memcpy is both
     // faster AND a more faithful model of the real write cost.
@@ -231,12 +231,12 @@ struct AudioToneTarget {
     int clapSamplesRemaining = 0;  // burst continues across packet boundaries
 };
 
-// â”€â”€ A/V CLAP: content-level sync measurement without a person or a meeting â”€â”€â”€
+// ── A/V CLAP: content-level sync measurement without a person or a meeting ───
 // The real clap test needs someone in a live meeting clapping at a camera. This
 // synthesizes the same event: at a known instant the video goes FULL WHITE for
 // exactly one frame and the audio carries a full-scale burst at the SAME instant.
 // Record it, find both events in the file, and the separation IS the pipeline's
-// content-level A/V skew â€” the number no stream-alignment check can see.
+// content-level A/V skew — the number no stream-alignment check can see.
 //
 // The two grids do not line up (audio packets are 10ms, video frames 16.7ms), so
 // the AUDIO burst is placed sample-accurately on the intended instant and the
@@ -270,7 +270,7 @@ static uint32_t                   g_auto_res = 2;
 // (validate-record-audio / validate-iso-record) see an unchanged roster; past
 // that the roster is generated so a drill can synthesize a FULL production wall
 // (the product targets 10 x 1080p sources, which is where the render tick's
-// per-source costs actually show up â€” six was never enough to reproduce it).
+// per-source costs actually show up — six was never enough to reproduce it).
 static std::vector<Participant> baseline_roster(int count) {
     static const std::string kNames[] = {"mv1", "mv2", "Producer", "mv4", "mv5", "mv6"};
     std::vector<Participant> r;
@@ -288,17 +288,17 @@ static bool roster_has(uint32_t id) {
     return false;
 }
 
-// â”€â”€ ONE video stream per participant â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── ONE video stream per participant ─────────────────────────────────────────
 // The rig auto-subscribes "participant-video-<id>-auto" so a headless validator
 // that never subscribes still sees frames; the app then explicitly subscribes
 // "participant-video-<id>-camera" for the SAME participant. Both are targets, so
-// both produced a frame every tick â€” and the core keys decoded frames by
+// both produced a frame every tick — and the core keys decoded frames by
 // participant (latestDecodedFrames_[frame.participantId]), so two independent
 // frameId sequences interleaved into one participant slot. Per-participant
 // delivery was therefore 2 x COREVIDEO_FAKE_ENGINE_FPS plus interleave phase
 // noise, which makes every fps number taken with this rig uninterpretable.
 // The real engine delivers one stream per subscribed participant; so does this
-// now â€” the explicit subscribe RETIRES the auto stand-in.
+// now — the explicit subscribe RETIRES the auto stand-in.
 static bool has_explicit_target_locked(uint32_t pid) {
     for (const auto& entry : g_targets)
         if (!entry.second.is_auto && entry.second.participant_id == pid) return true;
@@ -320,7 +320,7 @@ static void retire_auto_targets_locked(uint32_t pid) {
     }
 }
 
-// Build + send the {"cmd":"participants",...} event â€” byte-identical shape to
+// Build + send the {"cmd":"participants",...} event — byte-identical shape to
 // the real engine's EngineParticipants::send_roster().
 static void send_participants_locked() {
     std::string msg = R"({"cmd":"participants","meeting_generation":)" +
@@ -362,7 +362,7 @@ static void sync_auto_targets_locked() {
             diag("auto-subscribe " + uuid + " res=" + std::to_string(g_auto_res));
         }
     }
-    // Prune auto targets for departed participants â€” and for any participant an
+    // Prune auto targets for departed participants — and for any participant an
     // explicit subscribe has since taken over (belt and braces with the retire
     // on subscribe: whichever runs first, exactly one stream survives).
     for (auto it = g_targets.begin(); it != g_targets.end();) {
@@ -430,7 +430,7 @@ static void produce_frame_locked(Target& t, uint64_t tick) {
     // supposed to be testing. That write cost is rig overhead, not product cost:
     // in the real system the Zoom SDK's own decode thread fills this buffer. The
     // CORE still snapshots the full 3.1MB every frame, which is the cost under
-    // test â€” so this changes what the rig can deliver, not what it measures.
+    // test — so this changes what the rig can deliver, not what it measures.
     if (t.frame_count == 0) {
         std::memcpy(yp, t.luma.data(), y_len);
         std::memset(up, static_cast<uint8_t>(90 + (pid * 53) % 110), y_len / 4);
@@ -472,7 +472,7 @@ static void produce_frame_locked(Target& t, uint64_t tick) {
         t.clapPending = false;
         t.clapRestore = true;
         // How far past the intended instant this frame boundary fell. The
-        // measurement subtracts it â€” the source-side grid mismatch is not skew.
+        // measurement subtracts it — the source-side grid mismatch is not skew.
         const auto lateUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                 std::chrono::steady_clock::now() - g_clapInstant).count();
         diag("clap video pid=" + std::to_string(pid) + " frame=" +
@@ -607,7 +607,7 @@ static void produce_audio_locked(const std::string& uuid, AudioToneTarget& targe
                 }
             }
         } else if (target.clapSamplesRemaining > 0) {
-            // Burst straddled the packet boundary â€” finish it here so the event
+            // Burst straddled the packet boundary — finish it here so the event
             // keeps its full width regardless of where in the packet it landed.
             for (int i = 0; i < 480 && target.clapSamplesRemaining > 0; ++i) {
                 pcm[i] = clap_burst_sample(kClapBurstSamples - target.clapSamplesRemaining);
@@ -629,10 +629,10 @@ static void produce_audio_locked(const std::string& uuid, AudioToneTarget& targe
     }
 }
 
-// â”€â”€ Producer thread: frame fabrication for all active targets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Producer thread: frame fabrication for all active targets ────────────────
 // Cadence is COREVIDEO_FAKE_ENGINE_FPS (default 30, back-compat with the audio
 // and ISO validators). Zoom delivers up to 1080p60, and the product's north star
-// is 8 Zoom + 2 capture @1080p60 â€” a 30fps rig only exercises HALF the real
+// is 8 Zoom + 2 capture @1080p60 — a 30fps rig only exercises HALF the real
 // per-frame ingest/upload rate, so perf drills must be able to ask for 60.
 static void producer_loop() {
     using clock = std::chrono::steady_clock;
@@ -767,7 +767,7 @@ static void producer_loop() {
     }
 }
 
-// â”€â”€ Churn thread: active-speaker rotation + roster oscillation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Churn thread: active-speaker rotation + roster oscillation ────────────────
 static void churn_loop() {
     // Z4b soak mode: a deterministic AUDIO soak needs stable streams - roster
     // churn (a simulation feature for multiview tile testing) ends ISO tone
@@ -825,7 +825,7 @@ static void churn_loop() {
         }
 
         // Every ~10s: oscillate the roster 3 <-> 4 (mv4 leaves / re-joins). This
-        // drives multiview tile add/remove churn â€” the fail-fast trigger.
+        // drives multiview tile add/remove churn — the fail-fast trigger.
         if (half_seconds % 20 == 0) {
             std::lock_guard<std::mutex> lk(g_mtx);
             const Participant mv4{104, "mv4", true};
@@ -837,12 +837,12 @@ static void churn_loop() {
                     g_active_speaker = g_roster.front().id;
                 fourth_present = false;
                 // NOTE: do NOT emit {"cmd":"left"} here. In the real engine
-                // protocol `left` means the LOCAL user left the whole meeting â€”
+                // protocol `left` means the LOCAL user left the whole meeting —
                 // the core's ZoomEngineState maps it to reset() (meetingState ->
                 // idle, roster cleared), which flips the WinUI to "Zoom Offline /
                 // Video in room (0)" and tears down the meeting ~20s after join.
                 // A REMOTE participant leaving is conveyed purely by the updated
-                // {"cmd":"participants"} roster sent below â€” that drives the
+                // {"cmd":"participants"} roster sent below — that drives the
                 // multiview tile add/remove churn while staying in-meeting.
                 diag("roster -> 3 (mv4 left)");
             } else {
@@ -857,7 +857,7 @@ static void churn_loop() {
     }
 }
 
-// â”€â”€ Heartbeat thread: {"cmd":"ping"} every ~2s (mirrors the real engine) â”€â”€â”€â”€â”€â”€
+// ── Heartbeat thread: {"cmd":"ping"} every ~2s (mirrors the real engine) ──────
 static void heartbeat_loop() {
     while (g_running.load(std::memory_order_acquire)) {
         for (int i = 0; i < 20 && g_running.load(std::memory_order_acquire); ++i)
@@ -868,7 +868,7 @@ static void heartbeat_loop() {
 }
 
 int main(int argc, char** argv) {
-    // Per-instance IPC token from the parent â€” must match the pipe/socket/SHM
+    // Per-instance IPC token from the parent — must match the pipe/socket/SHM
     // names the core's ZoomEngineProcessClient expects (see engine main.cpp).
     const std::string ipc_token = ipc_token_from_args(argc, argv);
     EngineIpc::set_shm_prefix(ipc_token);

@@ -1,9 +1,9 @@
-﻿#include "edge/EdgeController.h"
+#include "edge/EdgeController.h"
 
 #include "core/BoundedAsyncLog.h"
 #include "edge/MeetingInput.h"
 #include "edge/SteadyClock.h"
-#include "modules/ZoomJoinFailureMessage.h"
+#include "edge/JoinFailureText.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -463,9 +463,9 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
                                e.message == "invalid_meeting_id" || e.stage == "join";
       if (joinFailure && (phase_ == Phase::Joining || phase_ == Phase::Authenticating)) {
         canEndOtherSession_ = e.message == "join_failed: account-busy-elsewhere";
-        fail(modules::zoomJoinFailureMessage(e.message));
+        fail(joinFailureText(e.message));
       } else if (e.message.rfind("meeting_failed", 0) == 0 && phase_ == Phase::InMeeting) {
-        fail("Zoom reported the meeting failed: " + e.message);
+        fail("Zoom ended the meeting connection: " + joinFailureText(e.message));
       } else {
         std::string text = e.stage.empty() ? e.message : e.stage + ": " + (e.message.empty() ? "error" : e.message);
         if (warnings_.size() < 20 && std::find(warnings_.begin(), warnings_.end(), text) == warnings_.end())
