@@ -495,8 +495,47 @@ public:
         if (m_audio_ctrl) m_audio_ctrl->SetEvent(this);
         m_video_ctrl = video_ctrl;
         if (m_video_ctrl) m_video_ctrl->SetEvent(this);
+        m_capture_only_attempts = 0;
         rebuild_roster();
+        enforce_capture_only("in_meeting");
         send_roster();
+    }
+
+    // CoreVideo Edge delta. Called after rebuild_roster(), outside m_mtx (SDK
+    // calls must never run under it). Mutes OUR OWN mic and stops OUR OWN
+    // camera whenever the roster shows either on. Never MuteAudio(0): zero
+    // mutes every participant in the meeting. If our own user id cannot be
+    // resolved the call is refused and reported, never guessed.
+    void enforce_capture_only(const char *reason)
+    {
+        if (!m_capture_only.load(std::memory_order_acquire) || !m_ctrl) return;
+        auto *me = m_ctrl->GetMySelfUser();
+        if (!me) {
+            EngineIpc::write(std::string(R"({"cmd":"error","stage":"capture_only","reason":"self_user_unavailable","trigger":")") +
+                             reason + "\"}");
+            return;
+        }
+        const unsigned int my_id = me->GetUserID();
+        const bool mic_open = me->GetAudioJoinType() != ZOOMSDK::AUDIOTYPE_NONE && !me->IsAudioMuted();
+        const bool camera_on = me->IsVideoOn();
+        if (!mic_open && !camera_on) return;
+        // Bounded: a meeting policy that keeps forcing us live must surface as
+        // an error, not as an endless mute loop.
+        if (++m_capture_only_attempts > 20) {
+            if (m_capture_only_attempts == 21)
+                EngineIpc::write(R"({"cmd":"error","stage":"capture_only","reason":"meeting_keeps_unmuting"})");
+            return;
+        }
+        if (mic_open && my_id != 0 && m_audio_ctrl) {
+            const auto err = m_audio_ctrl->MuteAudio(my_id, true);
+            EngineIpc::write(std::string(R"({"cmd":"debug","stage":"capture_only_mute","trigger":")") + reason +
+                             R"(","code":)" + std::to_string(static_cast<int>(err)) + "}");
+        }
+        if (camera_on && m_video_ctrl) {
+            const auto err = m_video_ctrl->MuteVideo();
+            EngineIpc::write(std::string(R"({"cmd":"debug","stage":"capture_only_video_off","trigger":")") + reason +
+                             R"(","code":)" + std::to_string(static_cast<int>(err)) + "}");
+        }
     }
 
     void set_active_share_user(uint32_t user_id) override
@@ -536,10 +575,14 @@ public:
         send_roster();
     }
 
+    // CoreVideo Edge delta: a capture-only join keeps this client muted and
+    // camera-off for the whole meeting. Set per join, before Join() is sent.
+    void set_capture_only(bool value) { m_capture_only.store(value, std::memory_order_release); }
+
     void onUserJoin(ZOOMSDK::IList<unsigned int> *, const zchar_t *) override { rebuild_roster(); send_roster(); }
     void onUserLeft(ZOOMSDK::IList<unsigned int> *, const zchar_t *) override { rebuild_roster(); send_roster(); }
     void onUserNamesChanged(ZOOMSDK::IList<unsigned int> *) override { rebuild_roster(); send_roster(); }
-    void onUserAudioStatusChange(ZOOMSDK::IList<ZOOMSDK::IUserAudioStatus *> *, const zchar_t *) override { rebuild_roster(); send_roster(); }
+    void onUserAudioStatusChange(ZOOMSDK::IList<ZOOMSDK::IUserAudioStatus *> *, const zchar_t *) override { rebuild_roster(); enforce_capture_only("audio_status"); send_roster(); }
 
     void onUserActiveAudioChange(ZOOMSDK::IList<unsigned int> *lst) override
     {
@@ -568,7 +611,7 @@ public:
         send_roster();
     }
 
-    void onUserVideoStatusChange(unsigned int, ZOOMSDK::VideoStatus) override { rebuild_roster(); send_roster(); }
+    void onUserVideoStatusChange(unsigned int, ZOOMSDK::VideoStatus) override { rebuild_roster(); enforce_capture_only("video_status"); send_roster(); }
     void onActiveSpeakerVideoUserChanged(unsigned int userId) override
     {
         {
@@ -755,6 +798,8 @@ private:
     uint64_t m_roster_revision = 0;
     uint32_t m_active_speaker = 0;
     std::atomic<uint32_t> m_active_share_user{0};
+    std::atomic<bool> m_capture_only{false};   // CoreVideo Edge delta
+    int m_capture_only_attempts = 0;           // SDK callback thread only
     // user_id -> {(component, uplink) -> last SDK ConnectionQuality}. Guarded by m_mtx.
     std::map<uint32_t, std::map<std::pair<int, bool>, ZOOMSDK::ConnectionQuality>> m_network_levels;
 };
@@ -1520,9 +1565,16 @@ int main(int argc, char **argv)
             const bool end_other_meeting =
                 line.find("\"end_other_meeting\":true") != std::string::npos;
             configuration_event.set_end_other_meeting(end_other_meeting);
+            // CoreVideo Edge delta: a capture device, not a gallery
+            // participant. Join camera-off; keep VoIP audio connected (raw
+            // audio needs it) but hold our own mic muted for the meeting.
+            const bool capture_only =
+                line.find("\"capture_only\":true") != std::string::npos;
+            participants.set_capture_only(capture_only);
             if (display_name.empty()) display_name = "CoreVideo Pro";
             EngineIpc::write(R"({"cmd":"debug","stage":"join_received","meeting_id":")" +
-                json_escape(meeting_id) + R"(","has_on_behalf_token":)" +
+                json_escape(meeting_id) + R"(","capture_only":)" +
+                std::string(capture_only ? "true" : "false") + R"(,"has_on_behalf_token":)" +
                 std::string(on_behalf_token.empty() ? "false" : "true") +
                 R"(,"has_user_zak":)" +
                 std::string(user_zak.empty() ? "false" : "true") +
@@ -1573,7 +1625,7 @@ int main(int argc, char **argv)
                 p.onBehalfToken             = on_behalf_token.empty() ? nullptr : g_wide_on_behalf_token.c_str();
                 p.userZAK                   = user_zak.empty() ? nullptr : g_wide_user_zak.c_str();
                 p.app_privilege_token       = app_privilege_token.empty() ? nullptr : g_wide_app_privilege_token.c_str();
-                p.isVideoOff                = false;
+                p.isVideoOff                = capture_only;
                 p.isAudioOff                = false;
                 p.isMyVoiceInMix            = true;
                 p.eAudioRawdataSamplingRate = ZOOMSDK::AudioRawdataSamplingRate_48K;

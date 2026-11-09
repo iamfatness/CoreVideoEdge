@@ -89,3 +89,31 @@ process; do not commit or log them.
 This is a vendored copy, not a submodule. If the upstream capture engine changes,
 re-copy `engine/src/*` and `src/engine-ipc.h` and re-apply the include-path
 rewrites above. Keep this engine standalone so it stays portable to this app.
+
+
+## CoreVideo Edge vendoring (2026-11-08)
+
+Copied into CoreVideo Edge from `iamfatness/CoreVideoPro` main @ `8751b8d2`
+(`native/zoom-engine/`). The macOS engine (`main-macos.mm`) was not copied:
+Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt`.
+
+### Edge deltas (keep this list exact when re-syncing from Pro)
+
+1. **Capture-only join** (`engine/main.cpp`). The `join` command accepts
+   `"capture_only":true`. When set:
+   - `JoinParam4WithoutLogin::isVideoOff = true` (join camera-off);
+   - VoIP audio stays connected (`isAudioOff = false`) because raw audio
+     depends on it, but `EngineParticipants::enforce_capture_only()` mutes
+     **our own** mic (`MuteAudio(<self user id>)`) and stops our own camera
+     (`MuteVideo()`) on entering the meeting and whenever the roster shows
+     either back on. It never calls `MuteAudio(0)` (zero mutes everyone); if
+     the self user cannot be resolved it reports
+     `{"cmd":"error","stage":"capture_only","reason":"self_user_unavailable"}`
+     instead. After 20 re-applications it stops and reports
+     `"reason":"meeting_keeps_unmuting"`.
+   - Without the flag the join behaves exactly as Pro's (CoreVideo Pro never
+     sends it).
+
+The fake engine (`fake/fake-engine.cpp`) is unmodified. Edge launches it with
+`COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE=0` so it never streams a participant Edge
+did not explicitly subscribe.
