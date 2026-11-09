@@ -1,0 +1,23 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="CoreVideoEdge.Desktop.App"
+             RequestedThemeVariant="Dark">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://CoreVideoEdge/Theme/Tokens.axaml" />
+        <ResourceInclude Source="avares://CoreVideoEdge/Theme/Icons.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+  <Application.Styles>
+    <FluentTheme>
+      <!-- Platform accent overridden to Edge cyan: no stock control falls back to the OS accent. -->
+      <FluentTheme.Palettes>
+        <ColorPaletteResources x:Key="Dark" Accent="#3CC4E0" RegionColor="#0A0B0C" AltHigh="#0A0B0C"
+                               BaseHigh="#E9EDEF" BaseMedium="#9BA4AB" ChromeMedium="#16191B" ChromeLow="#101315" />
+      </FluentTheme.Palettes>
+    </FluentTheme>
+    <StyleInclude Source="avares://CoreVideoEdge/Theme/Styles.axaml" />
+  </Application.Styles>
+</Application>
