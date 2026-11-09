@@ -1,0 +1,17 @@
+# Build output (contains the Zoom SDK runtime copied from ZOOM_SDK_DIR - never commit it)
+/build/
+/build-*/
+/out/
+bin/
+obj/
+*.user
+.vs/
+# Zoom SDK, tokens, local config - never commit
+ZoomSDK/
+zoom-sdk-*/
+*.env
+local.env
+config/edge.json
+# Recordings
+*.mp4
+/dist/

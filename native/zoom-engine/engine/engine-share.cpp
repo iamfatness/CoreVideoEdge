@@ -1,0 +1,454 @@
+#include "engine-share.h"
+#include "engine-writer.h"
+
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+
+static bool valid_i420_share_frame(YUVRawDataI420 *data,
+                                   uint32_t w,
+                                   uint32_t h,
+                                   size_t &y_len)
+{
+    if (w == 0 || h == 0) return false;
+    if (w > 8192 || h > 8192) return false;
+    if ((w & 1) != 0 || (h & 1) != 0) return false;
+    if (!data->GetYBuffer() || !data->GetUBuffer() || !data->GetVBuffer())
+        return false;
+
+    const uint64_t pixels = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
+    constexpr uint64_t max_reasonable_i420 = 8192ull * 8192ull;
+    constexpr uint64_t max_size_t_value = static_cast<uint64_t>(~size_t{0});
+    if (pixels > max_reasonable_i420 || pixels > max_size_t_value)
+        return false;
+
+    y_len = static_cast<size_t>(pixels);
+    return true;
+}
+
+EngineShare::EngineShare(EngineShareRosterSink *roster_sink)
+    : m_roster_sink(roster_sink)
+{
+}
+
+EngineShare::~EngineShare()
+{
+    detach();
+}
+
+void EngineShare::attach(ZOOMSDK::IMeetingShareController *share_ctrl)
+{
+    auto lock = m_callback_gate.lifecycle(m_mtx);
+    if (m_share_ctrl == share_ctrl)
+        return;
+    if (m_share_ctrl) {
+        RendererCallbackGate::Transition transition(m_callback_gate, lock);
+        m_share_ctrl->SetEvent(nullptr);
+    }
+    m_share_ctrl = share_ctrl;
+    if (m_share_ctrl) {
+        RendererCallbackGate::Transition transition(m_callback_gate, lock);
+        m_share_ctrl->SetEvent(this);
+    }
+    subscribe_active_share_locked("attach", lock);
+    reconcile_pending_share_locked(lock);
+}
+
+void EngineShare::detach()
+{
+    auto lock = m_callback_gate.lifecycle(m_mtx);
+    unsubscribe_renderer_locked(lock);
+    if (m_share_ctrl) {
+        auto *controller = m_share_ctrl;
+        m_share_ctrl = nullptr;
+        RendererCallbackGate::Transition transition(m_callback_gate, lock);
+        controller->SetEvent(nullptr);
+    }
+    m_pending_share_refresh = false;
+    set_active_share_user(0);
+}
+
+void EngineShare::set_raw_media_active(bool active)
+{
+    auto lock = m_callback_gate.lifecycle(m_mtx);
+    m_raw_media_active = active;
+    if (active) {
+        subscribe_active_share_locked("raw_media_ready", lock);
+    } else {
+        unsubscribe_renderer_locked(lock);
+    }
+    reconcile_pending_share_locked(lock);
+}
+
+void EngineShare::subscribe(const std::string &source_uuid, IpcFd e2p_fd)
+{
+    if (source_uuid.empty())
+        return;
+    auto lock = m_callback_gate.lifecycle(m_mtx);
+    const auto [it, inserted] = m_targets.emplace(source_uuid, nullptr);
+    if (inserted)
+        it->second = std::make_unique<ShareTarget>(e2p_fd);
+    else if (it->second)
+        it->second->e2p_fd = e2p_fd;
+
+    EngineIpc::write(
+        R"({"cmd":"debug","stage":"share_source_registered","source_uuid":")" +
+        source_uuid + R"(","active_share_source_id":)" +
+        std::to_string(m_current_share_source_id) +
+        R"(,"raw_media_active":)" +
+        std::string(m_raw_media_active ? "true" : "false") + "}");
+    subscribe_active_share_locked("source_registered", lock);
+    reconcile_pending_share_locked(lock);
+}
+
+void EngineShare::unsubscribe(const std::string &source_uuid)
+{
+    auto lock = m_callback_gate.lifecycle(m_mtx);
+    auto it = m_targets.find(source_uuid);
+    if (it == m_targets.end())
+        return;
+    if (it->second)
+        shm_region_destroy(it->second->shm);
+    m_targets.erase(it);
+    if (m_targets.empty())
+        unsubscribe_renderer_locked(lock);
+    reconcile_pending_share_locked(lock);
+}
+
+void EngineShare::unsubscribe_all()
+{
+    auto lock = m_callback_gate.lifecycle(m_mtx);
+    unsubscribe_renderer_locked(lock);
+    clear_target_shm_locked();
+    m_targets.clear();
+    m_pending_share_refresh = false;
+}
+
+void EngineShare::resubscribe_all()
+{
+    auto lock = m_callback_gate.lifecycle(m_mtx);
+    subscribe_active_share_locked("resubscribe_all", lock);
+    reconcile_pending_share_locked(lock);
+}
+
+uint32_t EngineShare::active_share_source_id(uint32_t *share_user_id, std::unique_lock<std::mutex> &lock)
+{
+    if (share_user_id)
+        *share_user_id = 0;
+    if (!m_share_ctrl)
+        return 0;
+    RendererCallbackGate::Transition transition(m_callback_gate, lock);
+    auto *sharers = m_share_ctrl->GetViewableSharingUserList();
+    if (!sharers)
+        return 0;
+    for (int i = 0; i < sharers->GetCount(); ++i) {
+        const uint32_t user_id = sharers->GetItem(i);
+        auto *sources = m_share_ctrl->GetSharingSourceInfoList(user_id);
+        if (!sources)
+            continue;
+        for (int j = 0; j < sources->GetCount(); ++j) {
+            const auto info = sources->GetItem(j);
+            if (info.shareSourceID != 0) {
+                if (share_user_id)
+                    *share_user_id = user_id;
+                return info.shareSourceID;
+            }
+        }
+    }
+    return 0;
+}
+
+void EngineShare::subscribe_active_share_locked(const char *reason, std::unique_lock<std::mutex> &lock)
+{
+    if (!m_raw_media_active || m_targets.empty()) {
+        EngineIpc::write(
+            R"({"cmd":"debug","stage":"share_subscribe_deferred","reason":")" +
+            std::string(reason ? reason : "unknown") +
+            R"(","raw_media_active":)" +
+            std::string(m_raw_media_active ? "true" : "false") +
+            R"(,"target_count":)" + std::to_string(m_targets.size()) + "}");
+        return;
+    }
+
+    uint32_t share_user_id = 0;
+    const uint32_t share_source_id = active_share_source_id(&share_user_id, lock);
+    if (share_source_id == 0) {
+        unsubscribe_renderer_locked(lock);
+        set_active_share_user(0);
+        EngineIpc::write(
+            R"({"cmd":"debug","stage":"share_unavailable","reason":")" +
+            std::string(reason ? reason : "unknown") + "\"}");
+        return;
+    }
+
+    set_active_share_user(share_user_id);
+    subscribe_to_locked(share_source_id, reason, lock);
+}
+
+bool EngineShare::subscribe_to_locked(uint32_t share_source_id, const char *reason, std::unique_lock<std::mutex> &lock)
+{
+    if (share_source_id == 0)
+        return false;
+    if (m_renderer && m_current_share_source_id == share_source_id)
+        return true;
+
+    unsubscribe_renderer_locked(lock);
+    ZOOMSDK::IZoomSDKRenderer *renderer = nullptr;
+    ZOOMSDK::SDKError err;
+    {
+        RendererCallbackGate::Transition transition(m_callback_gate, lock);
+        err = ZOOMSDK::createRenderer(&renderer, this);
+    }
+    if (err != ZOOMSDK::SDKERR_SUCCESS || !renderer) {
+        EngineIpc::write(
+            R"({"cmd":"debug","stage":"share_create_renderer_failed","code":)" +
+            std::to_string(static_cast<int>(err)) +
+            R"(,"share_source_id":)" + std::to_string(share_source_id) + "}");
+        return false;
+    }
+
+    ZOOMSDK::SDKError res_err;
+    {
+        RendererCallbackGate::Transition transition(m_callback_gate, lock);
+        res_err = renderer->setRawDataResolution(ZOOMSDK::ZoomSDKResolution_1080P);
+    }
+    EngineIpc::write(
+        R"({"cmd":"debug","stage":"share_set_resolution","code":)" +
+        std::to_string(static_cast<int>(res_err)) +
+        R"(,"share_source_id":)" + std::to_string(share_source_id) + "}");
+
+    {
+        RendererCallbackGate::Transition transition(m_callback_gate, lock);
+        err = renderer->subscribe(share_source_id, ZOOMSDK::RAW_DATA_TYPE_SHARE);
+    }
+    EngineIpc::write(
+        R"({"cmd":"debug","stage":"share_subscribe","code":)" +
+        std::to_string(static_cast<int>(err)) +
+        R"(,"share_source_id":)" + std::to_string(share_source_id) +
+        R"(,"reason":")" + std::string(reason ? reason : "unknown") + "\"}");
+    if (err != ZOOMSDK::SDKERR_SUCCESS) {
+        RendererCallbackGate::Transition transition(m_callback_gate, lock);
+        ZOOMSDK::destroyRenderer(renderer);
+        return false;
+    }
+
+    m_renderer = renderer;
+    m_current_share_source_id = share_source_id;
+    return true;
+}
+
+void EngineShare::unsubscribe_renderer_locked(std::unique_lock<std::mutex> &lock)
+{
+    ZOOMSDK::IZoomSDKRenderer *renderer = m_renderer;
+    m_renderer = nullptr;
+    m_current_share_source_id = 0;
+    if (!renderer)
+        return;
+    RendererCallbackGate::Transition transition(m_callback_gate, lock);
+    renderer->unSubscribe();
+    ZOOMSDK::destroyRenderer(renderer);
+}
+
+void EngineShare::reconcile_pending_share_locked(std::unique_lock<std::mutex> &lock)
+{
+    // Share-controller events during an SDK operation may change its viewable
+    // source list. Reconcile once after committing renderer ownership instead
+    // of nesting another renderer transition inside the SDK call.
+    if (!m_pending_share_refresh) return;
+    m_pending_share_refresh = false;
+    subscribe_active_share_locked("sdk_callback_refresh", lock);
+}
+
+void EngineShare::clear_target_shm_locked()
+{
+    for (auto &entry : m_targets) {
+        if (entry.second)
+            shm_region_destroy(entry.second->shm);
+    }
+}
+
+bool EngineShare::ensure_shm(ShareTarget &target,
+                             const std::string &source_uuid,
+                             size_t y_len)
+{
+    const size_t total =
+        sizeof(ShmFrameHeader) + y_len + y_len / 4 + y_len / 4;
+    if (total < y_len) return false;
+    if (target.shm.ptr && target.shm.size >= total) return true;
+
+    // Full 4K capacity up front — share raw data arrives at the sharer's native
+    // resolution and a named Windows section cannot grow while the core holds a
+    // read handle (the resolution-ramp freeze; see engine-ipc.h). A 4K I420
+    // frame is ~12.4MB, Zoom's documented ceiling.
+    const size_t capacity = i420_region_capacity(kMaxShareShmYLen);
+    if (total > capacity) return false;
+
+    const std::string region_name = EngineIpc::shm_prefix() + source_uuid;
+    return shm_region_create(target.shm, region_name, capacity);
+}
+
+void EngineShare::set_active_share_user(uint32_t user_id)
+{
+    if (m_current_share_user_id == user_id)
+        return;
+    m_current_share_user_id = user_id;
+    if (m_roster_sink)
+        m_roster_sink->set_active_share_user(user_id);
+}
+
+void EngineShare::onRendererBeDestroyed()
+{
+    auto lock = m_callback_gate.enter(m_mtx);
+    if (!lock.owns_lock()) return;
+    m_renderer = nullptr;
+    m_current_share_source_id = 0;
+}
+
+void EngineShare::onRawDataFrameReceived(YUVRawDataI420 *data)
+{
+    auto lock = m_callback_gate.enter(m_mtx);
+    if (!lock.owns_lock()) return;
+    if (!data)
+        return;
+    const uint32_t w = data->GetStreamWidth();
+    const uint32_t h = data->GetStreamHeight();
+    size_t y_len = 0;
+    if (!valid_i420_share_frame(data, w, h, y_len)) {
+        EngineIpc::write(
+            R"({"cmd":"debug","stage":"share_frame_invalid","w":)" +
+            std::to_string(w) + R"(,"h":)" + std::to_string(h) + "}");
+        return;
+    }
+
+    const uint32_t raw_share_source_id = data->GetSourceID();
+
+    const uint32_t share_user_id = m_current_share_user_id;
+    const bool limited = data->IsLimitedI420();
+    const auto planes = m_rangeNormalizer.normalize(
+        reinterpret_cast<const uint8_t *>(data->GetYBuffer()),
+        reinterpret_cast<const uint8_t *>(data->GetUBuffer()),
+        reinterpret_cast<const uint8_t *>(data->GetVBuffer()), y_len, limited, kMaxShareShmYLen);
+    if (!planes.y) {
+        EngineIpc::write(R"({"cmd":"debug","stage":"share_frame_exceeds_shm_capacity"})");
+        return;
+    }
+    if (limited && (++m_limitedFrames == 1 || m_limitedFrames % 100 == 0))
+        EngineIpc::write(R"({"cmd":"debug","stage":"share_limited_range_expanded","count":)" +
+                         std::to_string(m_limitedFrames) + "}");
+    for (auto &entry : m_targets) {
+        const std::string &source_uuid = entry.first;
+        ShareTarget &target = *entry.second;
+        if (!ensure_shm(target, source_uuid, y_len) || !target.shm.ptr) {
+            if (target.frame_count == 0) {
+                EngineIpc::write(
+                    R"({"cmd":"debug","stage":"share_shm_create_failed","source_uuid":")" +
+                    source_uuid + R"(","w":)" + std::to_string(w) +
+                    R"(,"h":)" + std::to_string(h) + "}");
+            }
+            continue;
+        }
+
+        auto *hdr = static_cast<ShmFrameHeader *>(target.shm.ptr);
+        auto *pixels = static_cast<char *>(target.shm.ptr) + sizeof(ShmFrameHeader);
+        uint32_t seq = hdr->sequence + 1;
+        if ((seq & 1u) == 0) ++seq;
+        hdr->sequence = seq;
+        std::atomic_thread_fence(std::memory_order_release);
+        hdr->width = w;
+        hdr->height = h;
+        hdr->y_len = static_cast<uint32_t>(y_len);
+
+        std::memcpy(pixels, planes.y, y_len);
+        std::memcpy(pixels + y_len, planes.u, y_len / 4);
+        std::memcpy(pixels + y_len + y_len / 4, planes.v, y_len / 4);
+        std::atomic_thread_fence(std::memory_order_release);
+        hdr->sequence = seq + 1;
+
+        ++target.frame_count;
+        if (target.frame_count == 1 || target.frame_count % 120 == 0) {
+            EngineIpc::write(
+                R"({"cmd":"debug","stage":"share_frame_received","source_uuid":")" +
+                source_uuid + R"(","share_source_id":)" +
+                std::to_string(raw_share_source_id != 0
+                    ? raw_share_source_id
+                    : m_current_share_source_id) +
+                R"(,"share_user_id":)" + std::to_string(share_user_id) +
+                R"(,"count":)" + std::to_string(target.frame_count) +
+                R"(,"w":)" + std::to_string(w) +
+                R"(,"h":)" + std::to_string(h) + "}");
+        }
+
+        EngineIpc::write(
+            R"({"cmd":"frame","source_uuid":")" + source_uuid +
+            R"(","participant_id":)" + std::to_string(share_user_id) +
+            R"(,"w":)" + std::to_string(w) +
+            R"(,"h":)" + std::to_string(h) + "}");
+    }
+}
+
+void EngineShare::onRawDataStatusChanged(RawDataStatus status)
+{
+    auto lock = m_callback_gate.enter(m_mtx);
+    if (!lock.owns_lock()) return;
+    for (const auto &entry : m_targets) {
+        EngineIpc::write(
+            R"({"cmd":"debug","stage":"share_raw_status","source_uuid":")" +
+            entry.first + R"(","status":)" +
+            std::to_string(static_cast<int>(status)) + "}");
+    }
+}
+
+void EngineShare::onSharingStatus(ZOOMSDK::ZoomSDKSharingSourceInfo shareInfo)
+{
+    std::unique_lock<std::mutex> lock(m_mtx);
+    if (m_callback_gate.suspended()) {
+        m_pending_share_refresh = true;
+        return;
+    }
+    EngineIpc::write(
+        R"({"cmd":"debug","stage":"share_status","user_id":)" +
+        std::to_string(shareInfo.userid) +
+        R"(,"share_source_id":)" + std::to_string(shareInfo.shareSourceID) +
+        R"(,"status":)" + std::to_string(static_cast<int>(shareInfo.status)) +
+        "}");
+
+    switch (shareInfo.status) {
+    case ZOOMSDK::Sharing_Other_Share_Begin:
+    case ZOOMSDK::Sharing_View_Other_Sharing:
+        if (shareInfo.userid != 0)
+            set_active_share_user(shareInfo.userid);
+        if (shareInfo.shareSourceID != 0)
+            subscribe_to_locked(shareInfo.shareSourceID, "share_status", lock);
+        else
+            subscribe_active_share_locked("share_status", lock);
+        break;
+    case ZOOMSDK::Sharing_Other_Share_End:
+        if (shareInfo.shareSourceID == 0 ||
+            shareInfo.shareSourceID == m_current_share_source_id) {
+            unsubscribe_renderer_locked(lock);
+            set_active_share_user(0);
+            subscribe_active_share_locked("share_end", lock);
+        }
+        break;
+    default:
+        break;
+    }
+    reconcile_pending_share_locked(lock);
+}
+
+void EngineShare::onShareContentNotification(
+    ZOOMSDK::ZoomSDKSharingSourceInfo shareInfo)
+{
+    std::unique_lock<std::mutex> lock(m_mtx);
+    if (m_callback_gate.suspended()) {
+        m_pending_share_refresh = true;
+        return;
+    }
+    if (shareInfo.userid != 0)
+        set_active_share_user(shareInfo.userid);
+    if (shareInfo.shareSourceID != 0 &&
+        shareInfo.shareSourceID != m_current_share_source_id) {
+        subscribe_to_locked(shareInfo.shareSourceID, "share_content", lock);
+    }
+    reconcile_pending_share_locked(lock);
+}

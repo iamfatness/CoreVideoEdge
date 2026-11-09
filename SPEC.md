@@ -1,5 +1,8 @@
 # CoreVideo Edge – Specification
 
+> **v1 scope (owner correction, 2026-11-08):** live relay to CoreVideo Pro is out of scope for v1. Edge v1 is Zoom sign-in + join, Sources (subscribe a subset), and ISO record; the ISO files are the hand-off. The network relay, transport, control plane and Pro-side ingest below are NOT implemented. See README.md.
+
+
 **Goal**: Multiply the number of simultaneous high-quality Zoom participant feeds available to CoreVideo Pro by distributing raw-data capture across multiple Zoom Meeting SDK clients, each staying under the per-client downlink bandwidth budget, then aggregating the feeds over the LAN.
 
 ## Problem
