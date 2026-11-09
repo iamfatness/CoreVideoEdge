@@ -221,7 +221,13 @@ struct FeedSender::Worker {
           audioFrames += placement.silenceFrames + frames;
           did = true;
         }
-        const auto fill = timeline.catchUp(now);
+      }
+      {
+        // Silence flows even before the engine has an audio ring for this
+        // guest: Zoom sends nothing for someone who never speaks, and the
+        // engine creates the ring on the first packet (live 2026-11-09: the
+        // NDI feeds of silent guests had no audio track at all).
+        const auto fill = timeline.catchUp(steady100ns() - start);
         if (fill > 0) { sendSilence(fill); audioFrames += fill; }
       }
       {
