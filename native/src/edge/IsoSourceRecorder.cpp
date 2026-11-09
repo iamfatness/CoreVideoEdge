@@ -293,6 +293,8 @@ void IsoSourceRecorder::run() {
     health_.heldRepeats = writer.heldRepeats();
     health_.videoDropped = writer.videoDropped();
     health_.encoderBacklogPeak = writer.videoBacklogPeak();
+    health_.cadenceRepeats = writer.cadenceRepeats();
+    health_.cadenceSkipped = writer.cadenceSkipped();
     health_.videoLost = lostVideo;
     health_.audioSamples = realAudio;
     health_.silenceSamples = silenceAudio;
@@ -337,6 +339,8 @@ void IsoSourceRecorder::run() {
   health_.heldRepeats = writer.heldRepeats();
   health_.videoDropped = writer.videoDropped();
   health_.encoderBacklogPeak = writer.videoBacklogPeak();
+    health_.cadenceRepeats = writer.cadenceRepeats();
+    health_.cadenceSkipped = writer.cadenceSkipped();
   health_.silenceSamples = writer.audioSamplesWritten() - realAudio;
   health_.bytes = writer.bytesOnDisk();
   if (!finalized) {

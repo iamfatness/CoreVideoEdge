@@ -27,7 +27,7 @@
 
 namespace corevideo::edge {
 
-inline constexpr int kDefaultMaxSubscriptions = 6;
+inline constexpr int kDefaultMaxSubscriptions = 8;
 // The engine's ISO arrival-ring demand table holds 8 sources
 // (zoom-engine/engine/iso-video-demand.h); a config may not exceed it.
 inline constexpr int kHardMaxSubscriptions = 8;
@@ -147,6 +147,14 @@ class SubscriptionBook {
       if (s.present && !inRoster(s.participantId)) {
         s.present = false;
         // The engine target stays; the slot keeps its regions for the rebind.
+      }
+    }
+    // Back with the same Zoom id (a breakout room returning, a roster gap):
+    // present again, and re-subscribed because the engine dropped it.
+    for (auto& s : selections_) {
+      if (!s.present && inRoster(s.participantId)) {
+        s.present = true;
+        out.push_back({SubscriptionAction::Kind::Subscribe, s.slot, s.participantId, "returned"});
       }
     }
     for (const auto& r : roster) {

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -23,6 +24,7 @@ struct EngineNotice {
   std::uint64_t generation = 0;  // which spawn produced this notice
   modules::ZoomEngineEvent event;
   std::string reason;            // Exited: why the pipe closed
+  std::optional<int> meetingStatus;  // Debug meeting_status: the SDK MeetingStatus value
 };
 
 class EngineSupervisor {

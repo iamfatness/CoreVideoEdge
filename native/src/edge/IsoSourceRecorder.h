@@ -44,6 +44,8 @@ struct IsoSourceHealth {
   std::int64_t heldRepeats = 0;       // held frame re-queued while the camera stalled (not frames)
   std::int64_t videoDropped = 0;      // refused because the encoder backlog was full (a defect if > 0)
   std::int64_t encoderBacklogPeak = 0;  // most samples the Sink Writer ever held unwritten
+  std::int64_t cadenceRepeats = 0;    // constant-rate mode: grid slots filled by repeating a frame
+  std::int64_t cadenceSkipped = 0;    // constant-rate mode: arrivals replaced within one grid slot
   std::int64_t videoLost = 0;        // arrivals the ring overwrote/tore before we read them
   std::int64_t audioSamples = 0;      // real (non-silence) samples written, per channel
   std::int64_t silenceSamples = 0;    // silence-fill written, per channel

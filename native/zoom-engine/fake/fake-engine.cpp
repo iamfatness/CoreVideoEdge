@@ -41,6 +41,8 @@
 //   COREVIDEO_FAKE_AUTH_DELAY_MS         synthetic SDK auth stall (0 by default, max 60000)
 //   COREVIDEO_FAKE_JOIN_DELAY_MS         synthetic meeting join stall (0 by default, max 60000)
 //   COREVIDEO_FAKE_SILENT_PARTICIPANTS   N: the first N roster participants send no audio (Edge delta 3)
+//   COREVIDEO_FAKE_ROOM_MOVE_AT_MS       T: scripted breakout move T ms after join (Edge delta 4)
+//   COREVIDEO_FAKE_ROOM_MOVE_MS          time spent in the breakout room (default 4000)
 //
 // Windows-focused; a minimal POSIX fallback keeps the file portable so the
 // CMake target stays green on the Linux stub build.
@@ -260,6 +262,7 @@ static uint32_t                   g_active_speaker = 0;
 static std::map<std::string, AudioToneTarget> g_audioTargets;  // Z4a tone streams
 static std::map<std::string, Target> g_targets;   // by source_uuid
 static bool                       g_joined = false;
+static bool                       g_raw_active = false;  // Edge delta 4: start_media / stop_media gate
 static uint64_t                   g_meeting_generation = 0;
 static uint64_t                   g_roster_revision = 0;
 static std::atomic<bool>          g_running{true};
@@ -679,7 +682,9 @@ static void producer_loop() {
         next += frameInterval;
         {
             std::lock_guard<std::mutex> lk(g_mtx);
-            if (g_joined) {
+            // Edge delta 4: like the real engine, nothing flows while raw media
+            // is off (before start_media, after stop_media, during a room move).
+            if (g_joined && g_raw_active) {
                 ++tick;
                 // A/V clap: arm video and audio from ONE instant so the two are
                 // genuinely the same event. Armed ON A FRAME BOUNDARY (not a
@@ -776,6 +781,61 @@ static void producer_loop() {
         // If we fell badly behind (debugger pause etc.), resync the cadence.
         if (clock::now() - next > std::chrono::milliseconds(200)) next = clock::now();
     }
+}
+
+// ── Edge delta 4: raw-media forgetting + a scripted breakout-room move ───────
+// The real stop_raw_media (StopRawRecording + unsubscribe_all) forgets every
+// video and audio binding; so does a room move, which the SDK reports as
+// MEETING_STATUS_JOIN_BREAKOUT_ROOM (14) / LEAVE_BREAKOUT_ROOM (15), then
+// DISCONNECTING (engine: raw media stopped, "left"), then INMEETING ("joined").
+static void fake_forget_media_locked() {
+    g_raw_active = false;
+    for (auto& [uuid, t] : g_targets) { shm_region_destroy(t.shm); shm_region_destroy(t.iso_shm); }
+    g_targets.clear();
+    for (auto& [auuid, atarget] : g_audioTargets) shm_region_destroy(atarget.shm);
+    g_audioTargets.clear();
+}
+
+static void fake_room_move(int status, std::vector<Participant> roster) {
+    EngineIpc::write(R"({"cmd":"debug","stage":"meeting_status","status":)" + std::to_string(status) +
+                     R"(,"result":0})");
+    { std::lock_guard<std::mutex> lk(g_mtx); fake_forget_media_locked(); g_joined = false; }
+    EngineIpc::write(R"({"cmd":"raw_media_status","active":false,"reason":"meeting_left"})");
+    EngineIpc::write(R"({"cmd":"left"})");
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_roster = std::move(roster);
+        ++g_meeting_generation;
+        g_roster_revision = 0;
+        g_active_speaker = g_roster.empty() ? 0 : g_roster.front().id;
+        g_joined = true;
+    }
+    EngineIpc::write(R"({"cmd":"joined"})");
+    { std::lock_guard<std::mutex> lk(g_mtx); send_participants_locked(); }
+}
+
+// COREVIDEO_FAKE_ROOM_MOVE_AT_MS=T: T ms after the first join, move into a
+// breakout room holding the first half of the guests (same ids), stay
+// COREVIDEO_FAKE_ROOM_MOVE_MS (default 4000), then return to the main room.
+static void fake_schedule_room_move(int baseline) {
+    const char* at = std::getenv("COREVIDEO_FAKE_ROOM_MOVE_AT_MS");
+    const long atMs = at ? std::atol(at) : 0;
+    if (atMs <= 0) return;
+    static std::atomic<bool> scheduled{false};
+    if (scheduled.exchange(true)) return;
+    const char* stay = std::getenv("COREVIDEO_FAKE_ROOM_MOVE_MS");
+    const long stayMs = stay ? (std::max)(500L, std::atol(stay)) : 4000L;
+    std::thread([atMs, stayMs, baseline] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(atMs));
+        if (!g_running.load()) return;
+        auto full = baseline_roster(baseline);
+        std::vector<Participant> room(full.begin(), full.begin() + (std::max)(size_t{1}, full.size() / 2));
+        fake_room_move(14, room);
+        std::this_thread::sleep_for(std::chrono::milliseconds(stayMs));
+        if (!g_running.load()) return;
+        fake_room_move(15, full);
+    }).detach();
 }
 
 // ── Churn thread: active-speaker rotation + roster oscillation ────────────────
@@ -953,11 +1013,13 @@ int main(int argc, char** argv) {
             }
             EngineIpc::write(R"({"cmd":"joined"})");
             { std::lock_guard<std::mutex> lk(g_mtx); send_participants_locked(); }
+            fake_schedule_room_move(baseline);
 
         } else if (line.find(IPC_CMD_LEAVE) != std::string::npos) {
             {
                 std::lock_guard<std::mutex> lk(g_mtx);
                 g_joined = false;
+                g_raw_active = false;
                 g_roster.clear();
                 g_active_speaker = 0;
                 for (auto& [uuid, t] : g_targets) { shm_region_destroy(t.shm); shm_region_destroy(t.iso_shm); }
@@ -968,10 +1030,14 @@ int main(int argc, char** argv) {
             EngineIpc::write(R"({"cmd":"left"})");
 
         } else if (line.find(IPC_CMD_START_MEDIA) != std::string::npos) {
+            { std::lock_guard<std::mutex> lk(g_mtx); g_raw_active = true; }
             EngineIpc::write(R"({"cmd":"debug","stage":"raw_media_ready","reason":"fake"})");
             EngineIpc::write(R"({"cmd":"raw_media_status","active":true,"reason":"fake"})");
 
         } else if (line.find(IPC_CMD_STOP_MEDIA) != std::string::npos) {
+            // Edge delta 4: the real stop_raw_media calls unsubscribe_all - every
+            // binding is forgotten and must be re-sent after start_media.
+            { std::lock_guard<std::mutex> lk(g_mtx); fake_forget_media_locked(); }
             EngineIpc::write(R"({"cmd":"debug","stage":"raw_media_stopped","reason":"fake"})");
             EngineIpc::write(R"({"cmd":"raw_media_status","active":false,"reason":"fake"})");
 

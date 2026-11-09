@@ -13,7 +13,7 @@ struct EdgeConfig {
   std::string displayName;           // shown to the meeting; default "CoreVideo Edge - <COMPUTERNAME>"
   std::string recordFolder;
   std::string filePrefix = "edge";
-  int maxSubscriptions = 6;          // 1..8, see SubscriptionPolicy.h
+  int maxSubscriptions = 8;          // 1..8, see SubscriptionPolicy.h
   std::vector<std::string> subscribe;  // display names to subscribe when present (ISO on)
   int videoBitrateMbps = 18;
   bool hardwareEncode = true;

@@ -59,6 +59,7 @@ struct IsoWriterSettings {
   int audioSampleRate = 48000;
   bool hardwareEncode = true;
   int maxVideoBacklog = 60;    // samples (2 s at 30 fps, ~190 MB at 1080p NV12)
+  int constantFps = 0;         // 0: variable, as Zoom delivers. 30 | 60: every sample on a fixed grid
 };
 
 class IsoMp4Writer {
@@ -100,6 +101,10 @@ class IsoMp4Writer {
   [[nodiscard]] std::int64_t heldRepeats() const { return heldRepeats_; }
   [[nodiscard]] std::int64_t videoDropped() const { return videoDropped_; }
   [[nodiscard]] std::int64_t videoBacklogPeak() const { return backlogPeak_; }
+  // Constant-rate mode only: grid slots filled by repeating the previous frame,
+  // and arrivals replaced by a later one in the same slot.
+  [[nodiscard]] std::int64_t cadenceRepeats() const { return cadenceRepeats_; }
+  [[nodiscard]] std::int64_t cadenceSkipped() const { return cadenceSkipped_; }
   [[nodiscard]] std::int64_t audioSamplesWritten() const { return audioSamples_; }  // includes silence
   [[nodiscard]] std::int64_t videoEnd100ns() const;
   [[nodiscard]] std::int64_t audioEnd100ns() const;
@@ -129,9 +134,17 @@ class IsoMp4Writer {
   std::int64_t pendingPts100ns_ = -1;
   bool pendingIsPreroll_ = false;
   bool pendingIsRepeat_ = false;
+  bool pendingIsCadence_ = false;  // a constant-rate grid fill, not a camera stall
   std::int64_t heldRepeats_ = 0;
   std::int64_t videoDropped_ = 0;
   std::int64_t backlogPeak_ = 0;
+  std::int64_t cadenceRepeats_ = 0;
+  std::int64_t cadenceSkipped_ = 0;
+  std::int64_t pendingIndex_ = -1;  // constant-rate grid slot of the held frame
+  [[nodiscard]] bool constantRate() const { return settings_.constantFps > 0; }
+  [[nodiscard]] std::int64_t gridIndex(std::int64_t pts100ns) const;
+  [[nodiscard]] std::int64_t gridPts(std::int64_t index) const;
+  bool fillGridTo(std::int64_t index, std::string& error, bool stall = false);  // repeat held frame up to index-1
   std::int64_t lastVideoPts100ns_ = -1;
   std::int64_t videoEnd100ns_ = 0;
   std::int64_t videoFrames_ = 0;

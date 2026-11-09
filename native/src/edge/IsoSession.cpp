@@ -232,6 +232,8 @@ void IsoSession::writeManifest(bool final) {
       entry.emplace("videoDropped", static_cast<double>(h.videoDropped));
       entry.emplace("heldRepeats", static_cast<double>(h.heldRepeats));
       entry.emplace("encoderBacklogPeak", static_cast<double>(h.encoderBacklogPeak));
+      entry.emplace("cadenceRepeats", static_cast<double>(h.cadenceRepeats));
+      entry.emplace("cadenceSkipped", static_cast<double>(h.cadenceSkipped));
       entry.emplace("audioSamples", static_cast<double>(h.audioSamples));
       entry.emplace("silenceSamples", static_cast<double>(h.silenceSamples));
       entry.emplace("audioLostPackets", static_cast<double>(h.audioLostPackets));
@@ -258,7 +260,8 @@ void IsoSession::writeManifest(bool final) {
           {"codec", "h264"},
           {"width", request_.writer.width},
           {"height", request_.writer.height},
-          {"frameRate", "variable (source timing)"},
+          {"frameRate", request_.writer.constantFps > 0 ? std::to_string(request_.writer.constantFps) + " (constant)"
+                                                        : std::string("variable (source timing)")},
           {"bitrateMbps", request_.writer.videoBitrateMbps},
           {"range", "bt709-full"},
       }},

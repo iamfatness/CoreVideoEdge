@@ -38,10 +38,17 @@ const seconds = Number(args.seconds ?? 20);
 const fps = Number(args.fps ?? 30);
 const outDir = resolve(args.out ?? join(root, 'build', 'validate-out'));
 const meeting = args.meeting ?? (fake ? 'https://zoom.us/j/1234567890?pwd=fake' : '');
-const silent = Number(args.silent ?? 0);  // fake: the first N roster guests never send audio
+const silent = Number(args.silent ?? 0);
+const roomMove = fake && args['room-move'] === 'true';  // fake: a breakout move mid-take and back
+const roomStayMs = 4000;
+const roomMoveAtMs = 6000 + Math.round(seconds * 400);  // after join; lands inside the take
+const format = args.format ? String(args.format) : '';  // e.g. 720 or 720/30 or 1080/60
+const formatHeight = format ? Number(format.split('/')[0]) : 1080;
+const formatFps = format && format.includes('/') ? Number(format.split('/')[1]) : 0;  // fake: the first N roster guests never send audio
 const names = args.names ? args.names.split(',').map((s) => s.trim()).filter(Boolean) : [];
 
 let silentIds = new Set();
+let sawMovingRooms = false;
 const failures = [];
 const check = (ok, what) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}`);
@@ -70,6 +77,10 @@ if (fake) {
   env.COREVIDEO_FAKE_CLAP_MS = '2000';
   env.COREVIDEO_FAKE_ENGINE_FPS = String(fps);
   env.COREVIDEO_FAKE_SILENT_PARTICIPANTS = String(silent);
+  if (roomMove) {
+    env.COREVIDEO_FAKE_ROOM_MOVE_AT_MS = String(roomMoveAtMs);
+    env.COREVIDEO_FAKE_ROOM_MOVE_MS = String(roomStayMs);
+  }
 }
 const child = spawn(exe, [fake ? '--fake' : '--engine', ...(fake ? [] : [join(bin, 'corevideo-zoom-engine.exe')]), '--config', configPath], {
   env,
@@ -93,7 +104,7 @@ child.stdout.on('data', (chunk) => {
     if (!line) continue;
     let message;
     try { message = JSON.parse(line); } catch { console.error('unparseable stdout line:', line); continue; }
-    if (message.type === 'state') state = message;
+    if (message.type === 'state') { state = message; if (message.movingRooms) sawMovingRooms = true; }
     else if (message.type === 'result' && message.id && pending.has(message.id)) {
       pending.get(message.id)(message);
       pending.delete(message.id);
@@ -216,6 +227,24 @@ async function main() {
   check(state.participants.filter((p) => !pickIds.has(p.id)).every((p) => !p.received),
     'no unsubscribed participant is being received');
 
+  // Engine On: Off stops every feed (the engine forgets its subscriptions);
+  // On brings them all back without the operator re-routing anything.
+  if (fake && !roomMove) {
+    const off = await send('engine', { on: false });
+    check(off.ok && (await waitFor((s) => s.rawMedia?.active === false && s.engineOn === false, 10000, 'raw media off')),
+      'Engine Off: raw media released');
+    await sleep(3500);
+    check(state.participants.filter((p) => pickIds.has(p.id)).every((p) => !p.received?.receiving),
+      'Engine Off: no routed source is being received');
+    const on = await send('engine', { on: true });
+    check(on.ok && (await waitFor((s) => s.rawMedia?.active === true &&
+      s.participants?.filter((p) => pickIds.has(p.id)).every((p) => p.received?.receiving), 15000, 'feeds back')),
+      'Engine On: every routed source is received again with no re-routing');
+  }
+  if (format) {
+    const f = await send('set-record-format', { height: formatHeight, fps: formatFps });
+    check(f.ok, `record format ${formatHeight}p ${formatFps ? formatFps + ' fps constant' : 'as delivered'}${f.ok ? '' : ': ' + f.error}`);
+  }
   const folder = await send('set-record-folder', { path: outDir });
   check(folder.ok, `record folder set to ${outDir}`);
   const start = await send('record-start');
@@ -226,6 +255,12 @@ async function main() {
     const line = (state.recording?.streams ?? []).map((s) =>
       `${s.name}: ${s.videoFrames}f ${(s.audioSamples / 48000).toFixed(1)}s-audio lost=${s.videoLost} backlog<=${s.encoderBacklogPeak}${s.warning ? ' WARN ' + s.warning : ''}`).join(' | ');
     console.log(`      t=${Math.min(seconds, t + 5)}s  ${line}`);
+  }
+  if (roomMove) {
+    check(sawMovingRooms, 'the node reported a room move and stayed in the meeting (no take stop)');
+    check(state.phase === 'in-meeting' && state.recording?.active, 'after the move: still in the meeting, still recording');
+    check(state.participants?.filter((p) => pickIds.has(p.id)).every((p) => p.slot && p.received?.receiving),
+      'after the move: every routed guest is back in their slot and received again');
   }
   const stop = await send('record-stop');
   const takeSeconds = (Date.now() - takeStarted) / 1000;
@@ -242,13 +277,16 @@ async function main() {
     check(s.videoDropped === 0 && s.encoderBacklogPeak <= 30,
       `${s.name}: encoder kept up (backlog peak ${s.encoderBacklogPeak} samples, ${s.videoDropped} dropped)`);
     if (fake) {
-      const expected = fps * takeSeconds;
-      check(s.videoFrames >= expected * 0.9 && s.videoFrames <= expected * 1.05,
+      const effFps = formatFps || fps;
+      const expected = effFps * takeSeconds - (roomMove ? fps * (roomStayMs / 1000 + 1.5) : 0);
+      const total = s.videoFrames + (formatFps ? s.cadenceRepeats : 0);
+      check(roomMove ? s.videoFrames >= fps * (takeSeconds - roomStayMs / 1000 - 3) * 0.5 : total >= expected * 0.9 && total <= expected * 1.05,
         `${s.name}: ${s.videoFrames} frames for ${takeSeconds.toFixed(1)} s at ${fps} fps (expected ~${Math.round(expected)})`);
       if (silentIds.has(s.participantId))
         check(s.audioSamples === 0, `${s.name}: silent guest, no isolated audio (track is silence)`);
       else
-        check(s.audioSamples > 0.9 * 48000 * takeSeconds, `${s.name}: ${(s.audioSamples / 48000).toFixed(2)} s of isolated audio`);
+        check(s.audioSamples > 0.9 * 48000 * (takeSeconds - (roomMove ? roomStayMs / 1000 + 2 : 0)),
+          `${s.name}: ${(s.audioSamples / 48000).toFixed(2)} s of isolated audio${roomMove ? ' (absent during the move is silence)' : ''}`);
     }
   }
 
@@ -274,7 +312,9 @@ async function main() {
     if (!check(probe, `${f}: ffprobe reads it`)) continue;
     const v = probe.streams.find((s) => s.codec_type === 'video');
     const a = probe.streams.find((s) => s.codec_type === 'audio');
-    check(v && v.codec_name === 'h264' && v.width === 1920 && v.height === 1080, `${f}: video ${v?.codec_name} ${v?.width}x${v?.height}`);
+    const wantW = Math.round(formatHeight * 16 / 9);
+    check(v && v.codec_name === 'h264' && v.width === wantW && v.height === formatHeight, `${f}: video ${v?.codec_name} ${v?.width}x${v?.height}`);
+    if (formatFps) check(v && v.avg_frame_rate === `${formatFps}/1`, `${f}: constant ${v?.avg_frame_rate} fps`);
     check(a && a.codec_name === 'aac' && Number(a.sample_rate) === 48000 && a.channels === 2,
       `${f}: audio ${a?.codec_name} ${a?.sample_rate} Hz x${a?.channels}`);
     const vd = Number(v?.duration), ad = Number(a?.duration), fd = Number(probe.format.duration);

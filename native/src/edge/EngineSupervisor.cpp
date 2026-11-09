@@ -1,6 +1,7 @@
 #include "edge/EngineSupervisor.h"
 
 #include "core/BoundedAsyncLog.h"
+#include "rpc/Json.h"
 #include "engine-ipc.h"
 
 #include <windows.h>
@@ -47,6 +48,15 @@ bool EngineSupervisor::start(const std::string& executablePath, Sink sink, std::
       EngineNotice notice;
       notice.generation = generation;
       notice.event = std::move(*event);
+      // The engine forwards every SDK meeting status as a debug line; Edge needs
+      // the number to tell a breakout-room move (14/15) or a reconnect (5) from
+      // a real leave. The lifted parser keeps only the stage.
+      if (notice.event.kind == modules::ZoomEngineEventKind::Debug && notice.event.stage == "meeting_status") {
+        if (auto json = rpc::Json::parse(*line)) {
+          if (const auto* status = json->get("status"); status && status->isNumber())
+            notice.meetingStatus = static_cast<int>(status->asNumber());
+        }
+      }
       sink(std::move(notice));
     }
   });
