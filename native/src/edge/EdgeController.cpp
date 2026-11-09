@@ -290,15 +290,13 @@ std::string EdgeController::cmdRecordStart() {
     if (!s.present) return s.displayName + " has left the meeting. Turn their ISO off or remove them before recording.";
     request.sources.push_back({s.slot, slotSourceUuid(s.slot), s.participantId, s.displayName});
   }
-  // Arm the engine's per-source ISO arrival rings first: they begin filling on
-  // the next frame, and the recorders discard anything captured before the
-  // take's epoch.
-  for (const auto& source : request.sources) sendIsoDemand(source.slot, request.isoRingEpoch);
   const auto refusal = session_.start(request);
-  if (!refusal.empty()) {
-    for (const auto& source : request.sources) sendIsoDemand(source.slot, 0);
-    return refusal;
-  }
+  if (!refusal.empty()) return refusal;
+  // Every file is open and every recorder is polling for its ring: arm the
+  // engine's per-source ISO arrival rings now. They fill from the next frame,
+  // and each recorder maps its ring within one 5 ms poll of it appearing, well
+  // inside the ring's 4-frame depth.
+  for (const auto& source : request.sources) sendIsoDemand(source.slot, request.isoRingEpoch);
   recordingWarning_.clear();
   lastTakeDir_ = session_.sessionDir().string();
   lastTakeHealth_.clear();

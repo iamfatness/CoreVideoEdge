@@ -118,10 +118,7 @@ std::string IsoSession::start(const IsoSessionRequest& request) {
   request_.folder = folder;
   sessionDir_ = dir;
   startWarning_ = disk.warning;
-  // ONE epoch for every file in the take (Pro: one RecordingPtsClock epoch
-  // across all ISO writers), so a clap lands at the same timestamp everywhere.
-  epoch100ns_ = steadyNow100ns();
-  startedUtc_ = utcNowIso8601();
+
   stoppedUtc_.clear();
   recorders_.clear();
   participantHistory_.clear();
@@ -139,7 +136,7 @@ std::string IsoSession::start(const IsoSessionRequest& request) {
     config.path = dir / isoFileName(index, source.displayName, "zoom" + std::to_string(source.participantId));
     config.shmPrefix = request_.shmPrefix;
     config.isoRingEpoch = request_.isoRingEpoch;
-    config.epoch100ns = epoch100ns_;
+
     config.writer = request_.writer;
     auto recorder = std::make_unique<IsoSourceRecorder>();
     std::string error;
@@ -160,6 +157,12 @@ std::string IsoSession::start(const IsoSessionRequest& request) {
     sessionDir_.clear();
     return failure;
   }
+  // ONE epoch for every file in the take (Pro: one RecordingPtsClock epoch
+  // across all ISO writers), so a clap lands at the same timestamp everywhere.
+  // Taken after every file is open: no file's head waits on another's setup.
+  epoch100ns_ = steadyNow100ns();
+  startedUtc_ = utcNowIso8601();
+  for (auto& recorder : recorders_) recorder->begin(epoch100ns_);
   active_ = true;
   writeManifest(false);
   core::nativeLogf("[iso] take started: %s (%zu ISO)\n", dir.string().c_str(), recorders_.size());

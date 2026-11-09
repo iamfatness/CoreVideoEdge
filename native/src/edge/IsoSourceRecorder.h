@@ -28,7 +28,6 @@ struct IsoSourceConfig {
   std::filesystem::path path;
   std::string shmPrefix;         // ipc_shm_prefix(engine instance token)
   std::uint32_t isoRingEpoch = 0;  // value sent with the engine's iso_video command
-  std::int64_t epoch100ns = 0;     // shared take epoch, steady_clock 100 ns ticks
   IsoWriterSettings writer;
 };
 
@@ -63,7 +62,11 @@ class IsoSourceRecorder {
 
   // Opens the file on the recorder thread and waits for the result, so a bad
   // path or a refused encoder is reported here, before the take is announced.
+  // Nothing is read until begin().
   bool start(const IsoSourceConfig& config, std::string& error);
+  // Sets the shared epoch and starts reading. Called once every file of the
+  // take has opened, so no file's head waits on another file's encoder setup.
+  void begin(std::int64_t epoch100ns);
   // Bring the files to `stop100ns` (steady clock), finalize, and join.
   void stop(std::int64_t stop100ns);
   void setParticipant(std::uint32_t participantId);
@@ -76,6 +79,8 @@ class IsoSourceRecorder {
   IsoSourceConfig config_;
   std::thread thread_;
   std::atomic<bool> stopRequested_{false};
+  std::atomic<bool> begun_{false};
+  std::atomic<std::int64_t> epoch100ns_{0};
   std::atomic<std::int64_t> stopAt100ns_{0};
 
   std::mutex openMutex_;

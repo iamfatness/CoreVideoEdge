@@ -103,3 +103,43 @@ TEST(IsoMp4Writer, AnUnwritablePathFailsLoudly) {
   EXPECT_FALSE(writer.open("Z:\\no\\such\\volume\\x.mp4", IsoWriterSettings{}, error));
   EXPECT_FALSE(error.empty());
 }
+
+TEST(IsoMp4Writer, AudioDecodesAtTheSamplePositionItWasWritten) {
+  // Guards the silence-fill timeline: if the AAC path ever adds encoder delay
+  // (priming without an edit list), every ISO stem would land late by it.
+  // Measured 2026-11-08: 0 samples on the Windows AAC MFT + ffmpeg decode.
+  MfScope mf;
+  const auto path = testDir() / "aac-position.mp4";
+  IsoMp4Writer writer;
+  IsoWriterSettings settings;
+  settings.hardwareEncode = false;
+  std::string error;
+  ASSERT_TRUE(writer.open(path, settings, error));
+  std::vector<std::uint8_t> nv12(1920 * 1080 * 3 / 2, 128);
+  writer.writeVideo(nv12.data(), 10'000'000, error);
+  ASSERT_TRUE(writer.writeSilence(48000, error));
+  std::vector<float> burst(96 * 2);
+  for (int i = 0; i < 96; ++i) burst[i * 2] = burst[i * 2 + 1] = ((i / 12) & 1) ? -0.97f : 0.97f;
+  ASSERT_TRUE(writer.writeAudio(burst.data(), 96, error));
+  ASSERT_TRUE(writer.writeSilence(48000, error));
+  ASSERT_TRUE(writer.finalize(0, error));
+  std::string pcm;
+  if (FILE* pipe = _popen(("ffmpeg -v error -i \"" + path.string() + "\" -map 0:a:0 -ac 1 -f s16le -").c_str(), "rb")) {
+    char buffer[65536];
+    size_t n;
+    while ((n = fread(buffer, 1, sizeof(buffer), pipe)) > 0) pcm.append(buffer, n);
+    _pclose(pipe);
+  }
+  if (pcm.empty()) {
+    std::fprintf(stderr, "  (ffmpeg not on PATH; decode check skipped)\n");
+    return;
+  }
+  const auto* x = reinterpret_cast<const std::int16_t*>(pcm.data());
+  long long found = -1;
+  for (size_t i = 0; i < pcm.size() / 2; ++i) {
+    if (x[i] > 16000 || x[i] < -16000) { found = static_cast<long long>(i); break; }
+  }
+  ASSERT_TRUE(found >= 0);
+  EXPECT_TRUE(found >= 48000 - 48 && found <= 48000 + 48);  // within 1 ms
+  if (!(found >= 48000 - 48 && found <= 48000 + 48)) std::fprintf(stderr, "  burst decoded at sample %lld\n", found);
+}

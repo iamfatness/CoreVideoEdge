@@ -19,7 +19,7 @@ namespace corevideo::edge {
 namespace {
 
 constexpr auto kPoll = std::chrono::milliseconds(5);
-constexpr auto kRemapEvery = std::chrono::milliseconds(250);
+
 
 struct ComMfScope {
   bool com = false;
@@ -58,6 +58,7 @@ bool IsoSourceRecorder::start(const IsoSourceConfig& config, std::string& error)
     health_.state = "opening";
   }
   stopRequested_ = false;
+  begun_ = false;
   thread_ = std::thread([this] { run(); });
   std::unique_lock<std::mutex> lock(openMutex_);
   openCv_.wait(lock, [this] { return openDone_; });
@@ -68,6 +69,11 @@ bool IsoSourceRecorder::start(const IsoSourceConfig& config, std::string& error)
     return false;
   }
   return true;
+}
+
+void IsoSourceRecorder::begin(std::int64_t epoch100ns) {
+  epoch100ns_.store(epoch100ns);
+  begun_.store(true);
 }
 
 void IsoSourceRecorder::stop(std::int64_t stop100ns) {
@@ -129,13 +135,17 @@ void IsoSourceRecorder::run() {
     health_.encoder = writer.encoderPath();
   }
 
+  // Hold until every file of the take is open and the epoch is set.
+  while (!begun_.load() && !stopRequested_.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  const std::int64_t epoch = begun_.load() ? epoch100ns_.load() : steadyNow100ns();
+
   const auto videoName = config_.shmPrefix + config_.slotUuid + "-iso";
   const auto audioName = config_.shmPrefix + config_.slotUuid + "_audio";
   ShmRegion videoRing, audioRing;
   std::uint32_t videoNext = 0;
   std::uint64_t audioNext = 0;
   bool audioSkipBacklog = true;  // a ring that already exists at start holds pre-take audio
-  auto lastMapAttempt = std::chrono::steady_clock::time_point{};
+
   IsoAudioTimeline timeline(config_.writer.audioSampleRate);
   std::vector<std::uint8_t> nv12;
   std::vector<float> stereo;
@@ -162,7 +172,7 @@ void IsoSourceRecorder::run() {
           videoRing.ptr, videoRing.size, config_.isoRingEpoch, videoNext, config_.slotUuid,
           participantId_.load(), false, arrivals, &evidence));
       for (auto& arrival : arrivals) {
-        const auto pts = arrival.captured100ns - config_.epoch100ns;
+        const auto pts = arrival.captured100ns - epoch;
         if (pts < 0) continue;  // captured before the take started
         const auto& frame = arrival.frame;
         if (frame.i420.empty() || frame.i420Width == 0 || frame.i420Height == 0) { ++lostVideo; continue; }
@@ -206,7 +216,7 @@ void IsoSourceRecorder::run() {
       }
       if (frames > 0) {
         lastAudio100ns = now;
-        const auto placement = timeline.place(now - config_.epoch100ns, frames);
+        const auto placement = timeline.place(now - epoch, frames);
         if (!failed && placement.silenceFrames > 0 && !writer.writeSilence(placement.silenceFrames, error)) {
           failed = true;
           setWarning("ISO writer stopped writing audio: " + error);
@@ -234,9 +244,10 @@ void IsoSourceRecorder::run() {
   };
 
   while (!stopRequested_.load()) {
-    const auto wall = std::chrono::steady_clock::now();
-    if ((!videoRing.ptr || !audioRing.ptr) && wall - lastMapAttempt >= kRemapEvery) {
-      lastMapAttempt = wall;
+    // The engine creates a ring on the first frame/packet after it is armed.
+    // The video ring holds only 4 frames, so look for it on every poll until
+    // it exists (OpenFileMapping on a missing name is a cheap kernel miss).
+    if (!videoRing.ptr || !audioRing.ptr) {
       if (!videoRing.ptr) shm_region_open_read(videoRing, videoName, zoom_iso::bytes);
       if (!audioRing.ptr && shm_region_open_read(audioRing, audioName, audio_ring_region_size())) {
         if (audioSkipBacklog) {
@@ -254,7 +265,7 @@ void IsoSourceRecorder::run() {
     std::lock_guard<std::mutex> lock(healthMutex_);
     if (health_.state != "failed") health_.state = "finalizing";
   }
-  const auto stopPts = stopAt100ns_.load() - config_.epoch100ns;
+  const auto stopPts = stopAt100ns_.load() - epoch;
   std::string finalizeError;
   const bool finalized = writer.finalize(stopPts > 0 ? stopPts : 0, finalizeError);
   shm_region_destroy(videoRing);

@@ -11,7 +11,7 @@ CoreVideo work. It is a standalone child process built here as
   (`shared/engine-ipc.h` `ShmFrameHeader`: `sequence/width/height/y_len`,
   followed by Y + U + V planes),
 - speaks a line-delimited JSON IPC protocol (`init` / `join` / `subscribe` /
-  `leave` …) over a pipe/socket.
+  `leave` â€¦) over a pipe/socket.
 
 ## Provenance
 
@@ -24,7 +24,7 @@ Source files:
 - `engine/` from the prior capture engine (`main`, `engine-video`,
   `engine-audio`, `engine-share`, `engine-writer.h`)
 - `shared/engine-ipc.h` from the prior capture IPC header
-- `engine/main-macos.mm` — the **macOS engine**, re-forked 2026-08-02 from the
+- `engine/main-macos.mm` â€” the **macOS engine**, re-forked 2026-08-02 from the
   CoreVideo OBS plugin's mac port (its `engine/src/main-macos.mm`, live-verified
   there against real meetings). The macOS Meeting SDK is Objective-C-only, so
   this is a self-contained ObjC++ rewrite of all four Windows files speaking
@@ -55,7 +55,7 @@ helper target or `COREVIDEO_WITH_ZOOM`.
 ### macOS
 
 On macOS, `ZOOM_SDK_DIR` is the directory **containing** `ZoomSDK.framework`
-and the target builds `main-macos.mm`. The SDK is not self-contained — it loads
+and the target builds `main-macos.mm`. The SDK is not self-contained â€” it loads
 its runtime bundles through the main bundle's `Contents/Frameworks`, so a bare
 binary auths `Failed(1)` synchronously. Wrap it with:
 
@@ -114,6 +114,13 @@ Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt
    - Without the flag the join behaves exactly as Pro's (CoreVideo Pro never
      sends it).
 
-The fake engine (`fake/fake-engine.cpp`) is unmodified. Edge launches it with
+2. **AAC-visible synthetic clap** (`fake/fake-engine.cpp`). The fake's A/V
+   clap audio burst alternated sign every sample (a 24 kHz tone at 48 kHz);
+   AAC's low-pass removes it entirely, so the clap could not be located in any
+   AAC file. It is now a full-scale 2 kHz square burst at the same sample
+   position and length (`clap_burst_sample`). Placement and timing logic are
+   unchanged.
+
+Otherwise the fake engine is unmodified. Edge launches it with
 `COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE=0` so it never streams a participant Edge
 did not explicitly subscribe.
