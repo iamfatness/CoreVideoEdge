@@ -13,8 +13,9 @@ machine is another full-quality budget.
 
 ## Processes
 
-- `CoreVideoEdge.exe` (WPF, `app/`): sign-in, join, sources, record, health.
-  Owns no media. Spawns the node and speaks its JSON-line API.
+- `CoreVideoEdge.exe` (Avalonia, `app/CoreVideoEdge.Desktop`): sign-in, join,
+  routing, monitor, record, feeds to Pro. Owns no media: spawns the node, speaks
+  its JSON-line API and reads the node's preview files read-only.
 - `corevideo-edge.exe` (C++, `native/src/edge/`): the node. Supervises the
   engine, enforces the subscription cap, records ISOs (Media Foundation).
 - `corevideo-zoom-engine.exe` / `-fake.exe` (`native/zoom-engine/`): Pro's
@@ -38,9 +39,27 @@ node scripts\validate-edge-iso.mjs --sources 6 --seconds 60
 ```
 
 Ninja single-config: `build\bin\*.exe` is always the build you just made. The
-app preview renderer checks layout without showing a window:
-`CoreVideoEdge.exe --render-preview <state.json> <out.png>` (capture a state
-line from the node first). Never drive the desktop; use the control API or the fake.
+app renders screens without a window:
+`CoreVideoEdge.exe --screenshot <state.json> <screen> <out.png> [--preview-dir <dir>]`
+(state lines and preview copies from `scripts/capture-ui-fixtures.mjs`; all of
+`docs/screenshots` from `scripts/render-screenshots.ps1`). Look at every
+screenshot after a UI change. Never drive the desktop; use the control API or the fake.
+
+## Operator app rules
+
+- Design source: the CoreVideo Edge design brief (tokens, type, screens).
+  Tokens live only in `Theme/Tokens.axaml`; `TokenContrastTests` measures every
+  pair. Components use token keys, never raw hex.
+- A cell, button or value never shows a result the node has not confirmed
+  (pending until the state line says so). Node refusal text is shown verbatim
+  at its cause.
+- Nothing unmeasured is drawn: no fps before the node measured it, no meter
+  without a dBFS, no counts before the roster. After 10 s without a state line
+  the screens' values are removed (the app polls `state` every second).
+- View models (`ViewModels/`) hold the behaviour and are unit-tested for the
+  JSON each action sends (`ViewModelCommandTests`). Views stay thin.
+- Windows-only seams (`EdgePlatform.cs`): DPAPI token protection and the HKCU
+  `corevideo://` registration. macOS: Keychain and `Info.plist` are TODO.
 
 ## Laws learned here (do not regress)
 
