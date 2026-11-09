@@ -58,6 +58,25 @@ class IsoAudioTimeline {
     return out;
   }
 
+  // A guest who is not talking sends nothing, and an audio track that stops
+  // advancing makes the MP4 muxer hold every video frame of that ISO (live
+  // 2026-11-09: 50 GB, engine killed). So while no packets arrive, the stem is
+  // filled with silence up to `holdbackMs` behind real time. The holdback is
+  // room for late packets: one that arrives within it is placed exactly; one
+  // later than that lands at the end of the silence already written. Returns
+  // the silence to write now (0 until the gap exceeds the tolerance, so it is
+  // written in chunks, not one sliver per poll).
+  [[nodiscard]] std::int64_t catchUp(std::int64_t nowSinceEpoch100ns, int holdbackMs = 200) {
+    if (nowSinceEpoch100ns < 0) return 0;
+    const std::int64_t nowFrame = nowSinceEpoch100ns / 10'000'000 * rate_ +
+                                  (nowSinceEpoch100ns % 10'000'000) * rate_ / 10'000'000;
+    const std::int64_t target = nowFrame - static_cast<std::int64_t>(rate_) * holdbackMs / 1000;
+    if (target - written_ <= toleranceFrames_) return 0;
+    const auto fill = target - written_;
+    written_ = target;
+    return fill;
+  }
+
   // Silence needed to bring the stem to `endFrame` (the take's common end).
   [[nodiscard]] std::int64_t padTo(std::int64_t endFrame) {
     const auto pad = endFrame > written_ ? endFrame - written_ : 0;

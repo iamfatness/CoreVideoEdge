@@ -229,6 +229,9 @@ void IsoSession::writeManifest(bool final) {
       entry.emplace("videoFrames", static_cast<double>(h.videoFrames));
       entry.emplace("prerollFrames", static_cast<double>(h.prerollFrames));
       entry.emplace("videoLost", static_cast<double>(h.videoLost));
+      entry.emplace("videoDropped", static_cast<double>(h.videoDropped));
+      entry.emplace("heldRepeats", static_cast<double>(h.heldRepeats));
+      entry.emplace("encoderBacklogPeak", static_cast<double>(h.encoderBacklogPeak));
       entry.emplace("audioSamples", static_cast<double>(h.audioSamples));
       entry.emplace("silenceSamples", static_cast<double>(h.silenceSamples));
       entry.emplace("audioLostPackets", static_cast<double>(h.audioLostPackets));

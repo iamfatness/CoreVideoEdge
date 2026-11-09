@@ -99,6 +99,7 @@ add_executable(corevideo-edge-tests
   tests/EngineProtocolTest.cpp
   tests/IsoMp4WriterTest.cpp
   tests/EdgeConfigTest.cpp
+  tests/FastConformTest.cpp
 )
 target_include_directories(corevideo-edge-tests PRIVATE src tests)
 target_link_libraries(corevideo-edge-tests PRIVATE edge_core)

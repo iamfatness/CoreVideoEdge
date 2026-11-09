@@ -64,7 +64,8 @@ estimated or defaulted for display.
     "warning": "...",                 // disk, raw media not granted, take stopped by the meeting
     "streams": [ { "index": 1, "slot": 1, "name": "Alice", "participantId": 16778240,
       "path": "...\\ISO-01-Alice.mp4", "state": "opening|recording|finalizing|finalized|failed",
-      "videoFrames": 1830, "videoLost": 0, "audioSamples": 2880000, "silenceSamples": 96000,
+      "videoFrames": 1830, "videoLost": 0, "videoDropped": 0, "heldRepeats": 0, "encoderBacklogPeak": 1,
+      "audioSamples": 2880000, "silenceSamples": 96000,
       "audioLostPackets": 0, "encoder": "hardware|software",
       "width": 1920, "height": 1080,  // last frame actually received
       "msSinceVideo": 20, "msSinceAudio": 15, "warning": "...",
@@ -77,6 +78,13 @@ estimated or defaulted for display.
   the size Zoom is actually delivering, not the size requested.
 - `videoLost` counts ISO arrivals the engine's 4-frame ring overwrote before
   Edge read them. Zero is the expectation; anything else is a defect.
+- `videoDropped` counts frames the writer refused because the encoder already
+  held more than 60 unwritten samples (a hard memory bound). Zero is the
+  expectation; anything else also shows as the stream's `warning`.
+  `encoderBacklogPeak` is the most samples the encoder ever held unwritten.
+- `heldRepeats` counts re-queues of the last frame while a camera was off or
+  stalled (once a second, so the video track keeps advancing). They are not
+  frames and are not in `videoFrames`.
 - After `record-stop`, `recording.streams` keeps the finished take's final
   health until the next take starts.
 

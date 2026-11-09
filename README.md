@@ -83,10 +83,20 @@ on PATH.
 node scripts\validate-edge-iso.mjs                          # 4 ISOs, 20 s, 30 fps
 node scripts\validate-edge-iso.mjs --sources 6 --seconds 60  # the full cap
 node scripts\validate-edge-iso.mjs --sources 6 --seconds 30 --fps 60
+node scripts\validate-edge-iso.mjs --sources 6 --seconds 50 --silent 3   # 3 guests never speak
+```
+
+In a live meeting (the node must be signed in when the meeting refuses
+anonymous apps; pass the ZAK through `COREVIDEO_ZOOM_USER_ZAK`, never on the
+command line):
+
+```powershell
+node scripts\validate-edge-iso.mjs --engine zoom --meeting "<full join link with pwd=>" --sources 6 --seconds 60
 ```
 
 It passes only if each ISO has h264 1920x1080 video **and** aac 48 kHz stereo
 audio, both tracks end together, all ISOs end together, no arrival was lost,
+the encoder never held more than 30 unwritten frames and dropped none,
 the frame count matches the source rate, and the fake's synthetic clap
 (a white frame plus an audio burst at the same instant) lines up within one
 frame inside each file and across files.
@@ -103,6 +113,17 @@ Results on the dev box (2026-11-08, NVIDIA hardware H.264, fake engine):
 |---|---|
 | 6 ISOs, 60 s, 30 fps (3 runs) | 1801 frames each, 0 lost, files end within 0 ms of each other, clap A/V skew 8-33 ms depending on the run (constant within a file), clap spread across ISOs 1.1-1.5 ms |
 | 6 ISOs, 30 s, 60 fps | 1800 frames each, 0 lost, clap A/V skew 16-18 ms, spread 2.8 ms |
+| 6 ISOs, 50 s, 3 silent guests | node memory flat at ~530 MB, encoder backlog 0, silent ISOs carry a full-length silent track, clap spread 2.4 ms |
+| **Live Zoom** (2026-11-09), 6 guests, 60 s | 0 lost, 0 dropped, encoder backlog 0, all ISOs end within 43 ms; node peak ~620 MB. Zoom delivered these guests at 1280x720 (upscaled into the 1080p files) |
+
+The first live take failed: guests who never spoke never advanced their audio
+track, the MP4 muxer held every one of their video frames waiting for it, and
+the node reached 50 GB until Windows ran out of memory and the engine died.
+The fake had always sent every guest audio. Fixed (silent tracks now advance
+in real time, a stalled camera repeats its held frame once a second, and the
+writer refuses to queue past 60 frames), and the fake can now make silent
+guests. The second live take then lost ~20% of frames to CPU scaling of 720p
+frames into 1080p (35 ms per frame); a new scaler does it in 2 ms.
 
 The A/V skew is a fake-engine artifact, measured and explained: the fake only
 writes audio packets on its video tick, so its audio reaches the ring up to one

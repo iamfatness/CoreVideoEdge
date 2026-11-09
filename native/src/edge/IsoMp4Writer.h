@@ -26,6 +26,12 @@
 //    their camera off is a long last frame, not invented repeats.
 //  - a black frame at t=0 pins the video track to the shared epoch (Pro does
 //    the same for a late first frame) and is counted as preroll, not as a frame.
+//  - the MP4 muxer interleaves by time: a track that stops advancing makes it
+//    hold every sample of the OTHER track. With throttling off that hold is
+//    unbounded (live 2026-11-09: silent guests -> 50 GB, engine killed). So
+//    the caller keeps both tracks moving (silence for audio, repeatHeldVideo
+//    for a stalled camera) and writeVideo refuses to queue past a hard
+//    backlog, counting each refused frame as dropped.
 //
 // Single-threaded: all calls from the owning recorder thread, which must have
 // initialized COM (MTA) and MFStartup.
@@ -52,6 +58,7 @@ struct IsoWriterSettings {
   int audioBitrateKbps = 192;
   int audioSampleRate = 48000;
   bool hardwareEncode = true;
+  int maxVideoBacklog = 60;    // samples (2 s at 30 fps, ~190 MB at 1080p NV12)
 };
 
 class IsoMp4Writer {
@@ -67,7 +74,17 @@ class IsoMp4Writer {
 
   // NV12 at exactly settings.width x settings.height. `pts100ns` is time since
   // the shared epoch; must increase (a non-increasing value is nudged +1 tick).
+  // A frame is DROPPED (returns true, counted in videoDropped) when the encoder
+  // already holds more than maxVideoBacklog samples.
   bool writeVideo(const std::uint8_t* nv12, std::int64_t pts100ns, std::string& error);
+
+  // Camera stalled: re-queue the held frame at `pts100ns` so the video track
+  // keeps advancing (counted in heldRepeats, never as a frame). No-op when
+  // pts100ns is not after the held frame.
+  bool repeatHeldVideo(std::int64_t pts100ns, std::string& error);
+
+  // Samples written to the Sink Writer that it has not yet passed to the file.
+  [[nodiscard]] std::int64_t videoBacklog() const;
 
   // Interleaved stereo float [-1, 1], appended at the next sample position.
   bool writeAudio(const float* stereo, std::int64_t frames, std::string& error);
@@ -80,6 +97,9 @@ class IsoMp4Writer {
   [[nodiscard]] bool writing() const { return writing_; }
   [[nodiscard]] std::int64_t videoFrames() const { return videoFrames_; }        // real frames only
   [[nodiscard]] std::int64_t prerollFrames() const { return prerollFrames_; }
+  [[nodiscard]] std::int64_t heldRepeats() const { return heldRepeats_; }
+  [[nodiscard]] std::int64_t videoDropped() const { return videoDropped_; }
+  [[nodiscard]] std::int64_t videoBacklogPeak() const { return backlogPeak_; }
   [[nodiscard]] std::int64_t audioSamplesWritten() const { return audioSamples_; }  // includes silence
   [[nodiscard]] std::int64_t videoEnd100ns() const;
   [[nodiscard]] std::int64_t audioEnd100ns() const;
@@ -108,6 +128,10 @@ class IsoMp4Writer {
   Microsoft::WRL::ComPtr<IMFMediaBuffer> pendingBuffer_;
   std::int64_t pendingPts100ns_ = -1;
   bool pendingIsPreroll_ = false;
+  bool pendingIsRepeat_ = false;
+  std::int64_t heldRepeats_ = 0;
+  std::int64_t videoDropped_ = 0;
+  std::int64_t backlogPeak_ = 0;
   std::int64_t lastVideoPts100ns_ = -1;
   std::int64_t videoEnd100ns_ = 0;
   std::int64_t videoFrames_ = 0;

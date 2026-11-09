@@ -52,6 +52,19 @@ line from the node first). Never drive the desktop; use the control API or the f
 - **Audio placement:** a batch read at `now` ENDS at `now`. Anchoring its start
   to `now` turns every late poll into silence that is never removed (drift).
   Gaps under 40 ms are jitter, not pauses.
+- **The MP4 muxer interleaves by time.** A track that stops advancing makes it
+  hold every sample of the other track, and with throttling off that is
+  unbounded (live 2026-11-09: guests who never spoke -> 50 GB, engine killed).
+  Silent stems advance in real time (`IsoAudioTimeline::catchUp`, 200 ms
+  holdback), a stalled camera repeats its held frame each second, and
+  `IsoMp4Writer` refuses to queue past `maxVideoBacklog`. Zoom sends NO audio
+  for a silent guest; the fake must be told to (`--silent N`).
+- **Conform cost decides frame loss.** The ISO ring is 4 frames (~130 ms). Pro's
+  box-filter conform took ~35 ms per 720p->1080p frame and lost ~20% live.
+  `edge/FastConform.h` (bilinear, tables) takes ~2 ms. Zoom often delivers
+  720p even on a 1080p subscription. Diagnose with the `[iso-diag]` log lines.
+- **A failed join is followed by `left`.** Do not let `left` overwrite the
+  engine's specific failure reason.
 - **Fake clap vs AAC:** an every-sample-alternating burst is 24 kHz and AAC
   deletes it. The fake's clap is a 2 kHz square (engine README delta 2).
 - **`MuteAudio(0)` mutes the whole meeting.** Capture-only mutes only the
@@ -65,7 +78,6 @@ line from the node first). Never drive the desktop; use the control API or the f
 
 ## Not yet verified (be honest about it)
 
-- A live Zoom meeting end to end (sign-in in a browser, host raw-data grant,
-  real guests, real A/V skew). The real engine binary is verified to authenticate
-  and to report a failed join (meeting-not-exist) in operator language.
+- Live A/V skew (there is no clap in a real meeting) and long live soaks. A live
+  6-ISO 60 s take passed 2026-11-09 (signed-in join, raw data granted, 0 lost).
 - Software-encoder fallback under load (6 x 1080p on CPU) and long soaks.

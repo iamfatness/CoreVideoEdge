@@ -40,6 +40,7 @@
 //   COREVIDEO_FAKE_PRIMARY_COLORS        "1": three distinct animated primary colors for Sources identity QA
 //   COREVIDEO_FAKE_AUTH_DELAY_MS         synthetic SDK auth stall (0 by default, max 60000)
 //   COREVIDEO_FAKE_JOIN_DELAY_MS         synthetic meeting join stall (0 by default, max 60000)
+//   COREVIDEO_FAKE_SILENT_PARTICIPANTS   N: the first N roster participants send no audio (Edge delta 3)
 //
 // Windows-focused; a minimal POSIX fallback keeps the file portable so the
 // CMake target stays green on the Linux stub build.
@@ -716,8 +717,18 @@ static void producer_loop() {
                 // stream keyed at synthetic id 0). A second hardcoded mix
                 // stream here interleaved TWO tones into the core zoom-mix
                 // buffer = packet-boundary phase chaos (run 11).
+                // Edge delta 3: COREVIDEO_FAKE_SILENT_PARTICIPANTS=N - the first
+                // N roster participants never send audio packets, the way real
+                // Zoom sends nothing for a guest who never speaks.
+                static const size_t s_silentCount = [] {
+                    const char* env = std::getenv("COREVIDEO_FAKE_SILENT_PARTICIPANTS");
+                    return env ? static_cast<size_t>(std::strtoul(env, nullptr, 10)) : size_t{0};
+                }();
                 for (auto& [auuid, atarget] : g_audioTargets) {
-                    if (atarget.fixedFreq > 0.0 || roster_has(atarget.participant_id))
+                    bool silent = false;
+                    for (size_t i = 0; i < g_roster.size() && i < s_silentCount; ++i)
+                        if (g_roster[i].id == atarget.participant_id) silent = true;
+                    if (!silent && (atarget.fixedFreq > 0.0 || roster_has(atarget.participant_id)))
                         produce_audio_locked(auuid, atarget);
                 }
                 // Sampled here (under g_mtx) for the achieved-rate diagnostic

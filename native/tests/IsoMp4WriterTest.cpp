@@ -143,3 +143,47 @@ TEST(IsoMp4Writer, AudioDecodesAtTheSamplePositionItWasWritten) {
   EXPECT_TRUE(found >= 48000 - 48 && found <= 48000 + 48);  // within 1 ms
   if (!(found >= 48000 - 48 && found <= 48000 + 48)) std::fprintf(stderr, "  burst decoded at sample %lld\n", found);
 }
+
+// Live 2026-11-09: with no audio advancing, the MP4 muxer held every video
+// frame and the node reached 50 GB. The writer must never queue past its cap.
+TEST(IsoMp4Writer, VideoWithAStalledAudioTrackIsBoundedNotBuffered) {
+  MfScope mf;
+  const auto path = testDir() / "writer-backlog.mp4";
+  IsoMp4Writer writer;
+  IsoWriterSettings settings;
+  settings.hardwareEncode = false;
+  settings.maxVideoBacklog = 30;
+  std::string error;
+  ASSERT_TRUE(writer.open(path, settings, error));
+  std::vector<std::uint8_t> nv12(1920 * 1080 * 3 / 2, 128);
+  for (int i = 0; i < 300; ++i)  // 10 s of video, no audio at all
+    ASSERT_TRUE(writer.writeVideo(nv12.data(), 1'000 + static_cast<std::int64_t>(i) * 333'333, error));
+  std::fprintf(stderr, "  backlogPeak=%lld dropped=%lld frames=%lld\n",
+               static_cast<long long>(writer.videoBacklogPeak()), static_cast<long long>(writer.videoDropped()),
+               static_cast<long long>(writer.videoFrames()));
+  EXPECT_TRUE(writer.videoBacklogPeak() <= settings.maxVideoBacklog + 2);
+  EXPECT_TRUE(writer.videoDropped() > 0);  // the muxer really does hold video for audio
+  EXPECT_TRUE(writer.finalize(100'000'000, error));
+}
+
+TEST(IsoMp4Writer, RepeatingTheHeldFrameKeepsAStalledCameraMoving) {
+  MfScope mf;
+  const auto path = testDir() / "writer-held.mp4";
+  IsoMp4Writer writer;
+  IsoWriterSettings settings;
+  settings.hardwareEncode = false;
+  std::string error;
+  ASSERT_TRUE(writer.open(path, settings, error));
+  // Camera never sends a frame; 10 s of audio arrives; the held (preroll)
+  // frame is repeated once a second.
+  std::vector<float> tone(4800 * 2, 0.1f);
+  for (int s = 1; s <= 10; ++s) {
+    for (int k = 0; k < 10; ++k) ASSERT_TRUE(writer.writeAudio(tone.data(), 4800, error));
+    ASSERT_TRUE(writer.repeatHeldVideo(static_cast<std::int64_t>(s) * 10'000'000, error));
+  }
+  EXPECT_TRUE(writer.repeatHeldVideo(5 * 10'000'000, error));  // not after the held frame: no-op
+  EXPECT_EQ(writer.heldRepeats(), std::int64_t{9});  // the 10th is still held when finalize flushes it
+  EXPECT_EQ(writer.videoFrames(), std::int64_t{0});
+  EXPECT_TRUE(writer.finalize(100'000'000, error));
+  EXPECT_EQ(writer.heldRepeats(), std::int64_t{10});
+}

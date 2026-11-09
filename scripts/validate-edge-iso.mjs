@@ -38,8 +38,10 @@ const seconds = Number(args.seconds ?? 20);
 const fps = Number(args.fps ?? 30);
 const outDir = resolve(args.out ?? join(root, 'build', 'validate-out'));
 const meeting = args.meeting ?? (fake ? 'https://zoom.us/j/1234567890?pwd=fake' : '');
+const silent = Number(args.silent ?? 0);  // fake: the first N roster guests never send audio
 const names = args.names ? args.names.split(',').map((s) => s.trim()).filter(Boolean) : [];
 
+let silentIds = new Set();
 const failures = [];
 const check = (ok, what) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}`);
@@ -67,6 +69,7 @@ if (fake) {
   env.COREVIDEO_FAKE_NO_CHURN = '1';
   env.COREVIDEO_FAKE_CLAP_MS = '2000';
   env.COREVIDEO_FAKE_ENGINE_FPS = String(fps);
+  env.COREVIDEO_FAKE_SILENT_PARTICIPANTS = String(silent);
 }
 const child = spawn(exe, [fake ? '--fake' : '--engine', ...(fake ? [] : [join(bin, 'corevideo-zoom-engine.exe')]), '--config', configPath], {
   env,
@@ -170,6 +173,7 @@ async function main() {
 
   await sleep(2000);
   const others = state.participants.filter((p) => !p.self);
+  silentIds = new Set(state.participants.slice(0, silent).map((p) => p.id));
   check(state.participants.every((p) => p.slot === undefined && p.received === undefined),
     `nothing subscribed or received before the operator asked (${others.length} others in the meeting)`);
   const self = state.participants.find((p) => p.self);
@@ -220,7 +224,7 @@ async function main() {
   for (let t = 0; t < seconds; t += 5) {
     await sleep(Math.min(5, seconds - t) * 1000);
     const line = (state.recording?.streams ?? []).map((s) =>
-      `${s.name}: ${s.videoFrames}f ${(s.audioSamples / 48000).toFixed(1)}s-audio lost=${s.videoLost}${s.warning ? ' WARN ' + s.warning : ''}`).join(' | ');
+      `${s.name}: ${s.videoFrames}f ${(s.audioSamples / 48000).toFixed(1)}s-audio lost=${s.videoLost} backlog<=${s.encoderBacklogPeak}${s.warning ? ' WARN ' + s.warning : ''}`).join(' | ');
     console.log(`      t=${Math.min(seconds, t + 5)}s  ${line}`);
   }
   const stop = await send('record-stop');
@@ -234,11 +238,17 @@ async function main() {
   for (const s of health) {
     check(s.state === 'finalized' && !s.warning, `${s.name}: finalized (${s.encoder ?? 'encoder unknown'} encoder)${s.warning ? ' - ' + s.warning : ''}`);
     check(s.videoLost === 0, `${s.name}: no ISO arrival lost (lost=${s.videoLost})`);
+    // Live 2026-11-09: an unbounded encoder backlog took the machine to 50 GB.
+    check(s.videoDropped === 0 && s.encoderBacklogPeak <= 30,
+      `${s.name}: encoder kept up (backlog peak ${s.encoderBacklogPeak} samples, ${s.videoDropped} dropped)`);
     if (fake) {
       const expected = fps * takeSeconds;
       check(s.videoFrames >= expected * 0.9 && s.videoFrames <= expected * 1.05,
         `${s.name}: ${s.videoFrames} frames for ${takeSeconds.toFixed(1)} s at ${fps} fps (expected ~${Math.round(expected)})`);
-      check(s.audioSamples > 0.9 * 48000 * takeSeconds, `${s.name}: ${(s.audioSamples / 48000).toFixed(2)} s of isolated audio`);
+      if (silentIds.has(s.participantId))
+        check(s.audioSamples === 0, `${s.name}: silent guest, no isolated audio (track is silence)`);
+      else
+        check(s.audioSamples > 0.9 * 48000 * takeSeconds, `${s.name}: ${(s.audioSamples / 48000).toFixed(2)} s of isolated audio`);
     }
   }
 
@@ -284,6 +294,12 @@ async function main() {
       const path = join(dir, f);
       const v = videoClaps(path);
       const a = audioClaps(path);
+      const iso = health.find((s) => s.path && s.path.endsWith(f));
+      if (iso && silentIds.has(iso.participantId)) {
+        check(v.length >= 2 && a.length === 0, `${f}: silent guest: ${v.length} video claps, no audio claps`);
+        firstVideoClap.push(v[0]);
+        continue;
+      }
       if (!check(v.length >= 2 && a.length >= 2, `${f}: found ${v.length} video and ${a.length} audio claps`)) continue;
       // Pair each video clap with an audio clap within 0.5 s (claps are 2 s
       // apart). A clap cut by the take's start or stop has no partner.

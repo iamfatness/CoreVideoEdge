@@ -66,6 +66,8 @@ bool IsoMp4Writer::open(const std::filesystem::path& path, const IsoWriterSettin
   lastVideoPts100ns_ = -1;
   videoEnd100ns_ = 0;
   videoFrames_ = prerollFrames_ = audioSamples_ = 0;
+  heldRepeats_ = videoDropped_ = backlogPeak_ = 0;
+  pendingIsRepeat_ = false;
   encoderPath_.clear();
 
   // ---- media types ---------------------------------------------------------
@@ -229,6 +231,30 @@ bool IsoMp4Writer::queueVideoBuffer(IMFMediaBuffer* buffer, std::int64_t pts100n
   pendingBuffer_ = buffer;
   pendingPts100ns_ = pts100ns;
   pendingIsPreroll_ = preroll;
+  pendingIsRepeat_ = false;
+  lastVideoPts100ns_ = pts100ns;
+  return true;
+}
+
+std::int64_t IsoMp4Writer::videoBacklog() const {
+  if (!sinkWriter_) return 0;
+  MF_SINK_WRITER_STATISTICS stats{};
+  stats.cb = sizeof(stats);
+  if (FAILED(sinkWriter_->GetStatistics(videoStream_, &stats))) return 0;
+  return stats.qwNumSamplesReceived > stats.qwNumSamplesProcessed
+             ? static_cast<std::int64_t>(stats.qwNumSamplesReceived - stats.qwNumSamplesProcessed)
+             : 0;
+}
+
+bool IsoMp4Writer::repeatHeldVideo(std::int64_t pts100ns, std::string& error) {
+  if (!writing_ || !pendingBuffer_ || pts100ns <= pendingPts100ns_) return true;
+  if (videoBacklog() > settings_.maxVideoBacklog) return true;  // the held frame just runs longer
+  const Microsoft::WRL::ComPtr<IMFMediaBuffer> held = pendingBuffer_;
+  if (!flushPendingVideo(pts100ns, error)) return false;
+  pendingBuffer_ = held;
+  pendingPts100ns_ = pts100ns;
+  pendingIsPreroll_ = false;
+  pendingIsRepeat_ = true;
   lastVideoPts100ns_ = pts100ns;
   return true;
 }
@@ -247,6 +273,7 @@ bool IsoMp4Writer::flushPendingVideo(std::int64_t end100ns, std::string& error) 
   if (!writeVideoSample(sample.Get(), error)) return false;
   videoEnd100ns_ = pendingPts100ns_ + duration;
   if (pendingIsPreroll_) ++prerollFrames_;
+  else if (pendingIsRepeat_) ++heldRepeats_;
   else ++videoFrames_;
   pendingBuffer_.Reset();
   return true;
@@ -258,6 +285,14 @@ bool IsoMp4Writer::writeVideo(const std::uint8_t* nv12, std::int64_t pts100ns, s
     return false;
   }
   if (pts100ns <= lastVideoPts100ns_) pts100ns = lastVideoPts100ns_ + 1;  // MF needs strictly increasing
+  // Hard bound on memory: never queue past the backlog cap. A dropped frame
+  // is counted and the held frame simply runs longer (VFR).
+  const auto backlog = videoBacklog();
+  backlogPeak_ = std::max(backlogPeak_, backlog);
+  if (backlog > settings_.maxVideoBacklog) {
+    ++videoDropped_;
+    return true;
+  }
   const DWORD bytes = static_cast<DWORD>(settings_.width) * settings_.height * 3 / 2;
   ComPtr<IMFMediaBuffer> buffer;
   BYTE* locked = nullptr;
@@ -389,9 +424,12 @@ bool IsoMp4Writer::finalize(std::int64_t minimumEnd100ns, std::string& error) {
     ok = false;
     firstError = "the finalized file is empty";
   }
-  core::nativeLogf("[iso] finalized %s frames=%lld preroll=%lld audioSamples=%lld end=%.3fs ok=%d %s\n",
+  core::nativeLogf("[iso] finalized %s frames=%lld preroll=%lld held=%lld dropped=%lld backlogPeak=%lld "
+                   "audioSamples=%lld end=%.3fs ok=%d %s\n",
                    path_.filename().string().c_str(), static_cast<long long>(videoFrames_),
-                   static_cast<long long>(prerollFrames_), static_cast<long long>(audioSamples_),
+                   static_cast<long long>(prerollFrames_), static_cast<long long>(heldRepeats_),
+                   static_cast<long long>(videoDropped_), static_cast<long long>(backlogPeak_),
+                   static_cast<long long>(audioSamples_),
                    end / 10'000'000.0, ok ? 1 : 0, firstError.c_str());
   if (!ok) error = firstError;
   return ok;

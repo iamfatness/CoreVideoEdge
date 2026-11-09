@@ -433,8 +433,10 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
       break;
     case K::Left:
       if (session_.active()) stopTake("Stopped because the meeting ended or this node was removed.");
-      if (phase_ != Phase::Leaving) lastError_ = "The meeting ended or this node was removed from it.";
-      phase_ = Phase::Idle;
+      // A failed join is followed by `left`; keep the engine's specific reason
+      // (live 2026-11-09: "does not admit anonymous apps" was overwritten).
+      if (phase_ == Phase::InMeeting) lastError_ = "The meeting ended or this node was removed from it.";
+      if (phase_ != Phase::Failed) phase_ = Phase::Idle;
       roster_.clear();
       rosterKnown_ = false;
       book_.clear();
@@ -613,6 +615,9 @@ Json EdgeController::buildState() const {
         {"state", h.state},
         {"videoFrames", static_cast<double>(h.videoFrames)},
         {"videoLost", static_cast<double>(h.videoLost)},
+        {"videoDropped", static_cast<double>(h.videoDropped)},
+        {"heldRepeats", static_cast<double>(h.heldRepeats)},
+        {"encoderBacklogPeak", static_cast<double>(h.encoderBacklogPeak)},
         {"audioSamples", static_cast<double>(h.audioSamples)},
         {"silenceSamples", static_cast<double>(h.silenceSamples)},
         {"audioLostPackets", static_cast<double>(h.audioLostPackets)},
@@ -626,6 +631,8 @@ Json EdgeController::buildState() const {
     if (h.msSinceAudio >= 0) row.emplace("msSinceAudio", static_cast<double>(h.msSinceAudio));
     if (h.bytes > 0) row.emplace("bytes", static_cast<double>(h.bytes));
     std::string streamWarning = h.warning;
+    if (streamWarning.empty() && h.videoDropped > 0)
+      streamWarning = "Encoder fell behind: " + std::to_string(h.videoDropped) + " frame(s) dropped.";
     if (streamWarning.empty() && active && h.state == "recording") {
       if (h.msSinceVideo < 0 && (steadyNow100ns() - session_.epoch100ns()) > 50'000'000)
         streamWarning = "No video received yet.";

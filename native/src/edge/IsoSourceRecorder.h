@@ -41,7 +41,10 @@ struct IsoSourceHealth {
   std::string encoder;          // measured: hardware | software | ""
   std::int64_t videoFrames = 0;       // real frames written
   std::int64_t prerollFrames = 0;
-  std::int64_t videoLost = 0;         // arrivals the ring overwrote/tore before we read them
+  std::int64_t heldRepeats = 0;       // held frame re-queued while the camera stalled (not frames)
+  std::int64_t videoDropped = 0;      // refused because the encoder backlog was full (a defect if > 0)
+  std::int64_t encoderBacklogPeak = 0;  // most samples the Sink Writer ever held unwritten
+  std::int64_t videoLost = 0;        // arrivals the ring overwrote/tore before we read them
   std::int64_t audioSamples = 0;      // real (non-silence) samples written, per channel
   std::int64_t silenceSamples = 0;    // silence-fill written, per channel
   std::int64_t audioLostPackets = 0;
