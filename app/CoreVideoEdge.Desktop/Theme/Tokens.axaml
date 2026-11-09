@@ -1,0 +1,95 @@
+<!--
+  CoreVideo Edge colour tokens (design brief section 3.2, exact hex).
+  Components reference these keys only, never raw hex. Every text/background
+  pair the brief lists is contrast-checked by TokenContrastTests.
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Neutrals (Pro's ramp) -->
+  <Color x:Key="BgColor">#0A0B0C</Color>
+  <Color x:Key="PanelColor">#101315</Color>
+  <Color x:Key="SurfaceColor">#16191B</Color>
+  <Color x:Key="RaisedColor">#1B1F22</Color>
+  <Color x:Key="HoverColor">#22272B</Color>
+  <Color x:Key="WellColor">#0E1112</Color>
+  <Color x:Key="VideoColor">#000000</Color>
+  <Color x:Key="HairlineColor">#17FFFFFF</Color>
+  <Color x:Key="CtlBorderColor">#6B767F</Color>
+
+  <!-- Text -->
+  <Color x:Key="TextColor">#E9EDEF</Color>
+  <Color x:Key="Text2Color">#9BA4AB</Color>
+  <Color x:Key="TextDisabledColor">#5C656B</Color>
+
+  <!-- Accent (Edge cyan: selection and primary action, never health) -->
+  <Color x:Key="AccentColor">#3CC4E0</Color>
+  <Color x:Key="AccentHoverColor">#5FD3EA</Color>
+  <Color x:Key="AccentPressColor">#2AA9C4</Color>
+  <Color x:Key="OnAccentColor">#04161B</Color>
+  <Color x:Key="AccentTintColor">#0B2128</Color>
+
+  <!-- Status -->
+  <Color x:Key="LiveColor">#22C86E</Color>
+  <Color x:Key="OnLiveColor">#06170D</Color>
+  <Color x:Key="LiveTintColor">#0F2419</Color>
+  <Color x:Key="WarnColor">#E8A41F</Color>
+  <Color x:Key="OnWarnColor">#1A1200</Color>
+  <Color x:Key="WarnTintColor">#2A2110</Color>
+  <Color x:Key="RecColor">#E5433F</Color>
+  <Color x:Key="OnRecColor">#1A0000</Color>
+  <Color x:Key="ErrorTextColor">#FF7A6E</Color>
+  <Color x:Key="ErrorTintColor">#2A1414</Color>
+  <Color x:Key="FocusColor">#5EA3EA</Color>
+
+  <!-- Logo knockout on the app icon squircle (brief section 6) -->
+  <Color x:Key="KnockoutColor">#0B0D0E</Color>
+
+  <SolidColorBrush x:Key="BgBrush" Color="{StaticResource BgColor}" />
+  <SolidColorBrush x:Key="PanelBrush" Color="{StaticResource PanelColor}" />
+  <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource SurfaceColor}" />
+  <SolidColorBrush x:Key="RaisedBrush" Color="{StaticResource RaisedColor}" />
+  <SolidColorBrush x:Key="HoverBrush" Color="{StaticResource HoverColor}" />
+  <SolidColorBrush x:Key="WellBrush" Color="{StaticResource WellColor}" />
+  <SolidColorBrush x:Key="VideoBrush" Color="{StaticResource VideoColor}" />
+  <SolidColorBrush x:Key="HairlineBrush" Color="{StaticResource HairlineColor}" />
+  <SolidColorBrush x:Key="CtlBorderBrush" Color="{StaticResource CtlBorderColor}" />
+  <SolidColorBrush x:Key="TextBrush" Color="{StaticResource TextColor}" />
+  <SolidColorBrush x:Key="Text2Brush" Color="{StaticResource Text2Color}" />
+  <SolidColorBrush x:Key="TextDisabledBrush" Color="{StaticResource TextDisabledColor}" />
+  <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
+  <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHoverColor}" />
+  <SolidColorBrush x:Key="AccentPressBrush" Color="{StaticResource AccentPressColor}" />
+  <SolidColorBrush x:Key="OnAccentBrush" Color="{StaticResource OnAccentColor}" />
+  <SolidColorBrush x:Key="AccentTintBrush" Color="{StaticResource AccentTintColor}" />
+  <SolidColorBrush x:Key="LiveBrush" Color="{StaticResource LiveColor}" />
+  <SolidColorBrush x:Key="OnLiveBrush" Color="{StaticResource OnLiveColor}" />
+  <SolidColorBrush x:Key="LiveTintBrush" Color="{StaticResource LiveTintColor}" />
+  <SolidColorBrush x:Key="WarnBrush" Color="{StaticResource WarnColor}" />
+  <SolidColorBrush x:Key="OnWarnBrush" Color="{StaticResource OnWarnColor}" />
+  <SolidColorBrush x:Key="WarnTintBrush" Color="{StaticResource WarnTintColor}" />
+  <SolidColorBrush x:Key="RecBrush" Color="{StaticResource RecColor}" />
+  <SolidColorBrush x:Key="OnRecBrush" Color="{StaticResource OnRecColor}" />
+  <SolidColorBrush x:Key="ErrorTextBrush" Color="{StaticResource ErrorTextColor}" />
+  <SolidColorBrush x:Key="ErrorTintBrush" Color="{StaticResource ErrorTintColor}" />
+  <SolidColorBrush x:Key="FocusBrush" Color="{StaticResource FocusColor}" />
+  <SolidColorBrush x:Key="KnockoutBrush" Color="{StaticResource KnockoutColor}" />
+
+  <!-- Fonts: bundled OFL (Assets/Fonts). Plex Mono only for measured values and tally tags. -->
+  <FontFamily x:Key="UiFont">avares://CoreVideoEdge/Assets/Fonts#Space Grotesk</FontFamily>
+  <FontFamily x:Key="MonoFont">avares://CoreVideoEdge/Assets/Fonts#IBM Plex Mono</FontFamily>
+
+  <!-- Radii (4 tags/cells, 6 buttons/fields, 8 panels/tiles) -->
+  <CornerRadius x:Key="RadiusSmall">4</CornerRadius>
+  <CornerRadius x:Key="RadiusControl">6</CornerRadius>
+  <CornerRadius x:Key="RadiusPanel">8</CornerRadius>
+
+  <!-- Platform accent override: no stock control falls back to the OS accent. -->
+  <Color x:Key="SystemAccentColor">#3CC4E0</Color>
+  <Color x:Key="SystemAccentColorLight1">#5FD3EA</Color>
+  <Color x:Key="SystemAccentColorLight2">#5FD3EA</Color>
+  <Color x:Key="SystemAccentColorLight3">#5FD3EA</Color>
+  <Color x:Key="SystemAccentColorDark1">#2AA9C4</Color>
+  <Color x:Key="SystemAccentColorDark2">#2AA9C4</Color>
+  <Color x:Key="SystemAccentColorDark3">#2AA9C4</Color>
+</ResourceDictionary>

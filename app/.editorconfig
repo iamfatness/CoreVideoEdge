@@ -1,0 +1,7 @@
+root = false
+
+# Lifted CoreVideo Pro files stay verbatim. DpapiSecretProtector calls the
+# Windows-only ProtectedData API; Edge reaches it only through
+# EdgeSecretProtection, which checks OperatingSystem.IsWindows() first.
+[{CoreVideoEdge.Core/Lifted/**.cs,CoreVideoEdge.Tests/Lifted/**.cs}]
+dotnet_diagnostic.CA1416.severity = none

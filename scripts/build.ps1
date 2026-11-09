@@ -58,12 +58,13 @@ if ($Dist) {
   Write-Host "== staging $out =="
   if (Test-Path $out) { Remove-Item -Recurse -Force $out }
   New-Item -ItemType Directory -Force $out | Out-Null
-  $app = Join-Path $repo 'app\CoreVideoEdge.App\bin\x64\Release\net9.0-windows\win-x64'
+  $app = Join-Path $repo 'app\CoreVideoEdge.Desktop\bin\x64\Release\net9.0'
+  if (-not (Test-Path (Join-Path $app 'CoreVideoEdge.exe'))) { throw "operator app not built: $app\CoreVideoEdge.exe is missing" }
   Copy-Item "$app\*" $out -Recurse
   # Node, engines and (when built) the Zoom SDK runtime the engine needs beside it.
   Get-ChildItem (Join-Path $build 'bin') | Where-Object { $_.Name -ne 'corevideo-edge-tests.exe' } |
     ForEach-Object { Copy-Item $_.FullName $out -Recurse -Force }
-  Write-Host "Staged. Copy $out to the Edge machine and run CoreVideoEdge.exe (needs the .NET 9 Desktop Runtime)."
+  Write-Host "Staged. Copy $out to the Edge machine and run CoreVideoEdge.exe (needs the .NET 9 Runtime)."
   Write-Host "dist\ contains the Zoom SDK runtime: never commit it."
 }
 Write-Host "Done."

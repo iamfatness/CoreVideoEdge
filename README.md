@@ -38,8 +38,9 @@ for v1 (the relay sketched in `SPEC.md` is not implemented).
 | `native/zoom-engine/` | Pro's Zoom engine, vendored (same pattern Pro uses). Edge deltas listed in its README. |
 | `native/src/modules`, `core`, `rpc` | Code lifted from Pro verbatim (engine process/IPC client, PTS clock, frame conform, naming, JSON, logging). |
 | `native/src/edge/` | The node: `corevideo-edge.exe` (supervisor, subscriptions, ISO writer). |
-| `app/` | WPF operator app (`CoreVideoEdge.exe`) + Pro's lifted OAuth/token-store code + tests. |
-| `scripts/` | `build.ps1`, `validate-edge-iso.mjs` (end-to-end check through the control API). |
+| `app/` | Operator app `CoreVideoEdge.exe` (Avalonia, `CoreVideoEdge.Desktop`; Windows now, macOS next) + `CoreVideoEdge.Core` (node client, state, preview reader, Pro's lifted OAuth/token-store code) + tests. |
+| `docs/brand/`, `docs/screenshots/` | The Satellite Tile mark and brand note; headless screenshots of every screen and state. |
+| `scripts/` | `build.ps1`, `validate-edge-iso.mjs` (end-to-end check through the control API), `capture-ui-fixtures.mjs` + `render-screenshots.ps1` (UI screenshots from real fake-engine state). |
 | `docs/PROTOCOL.md` | The node's JSON-line control API. |
 | `config/edge.example.json` | Node config (display name, folder, prefix, cap, names to subscribe). |
 
@@ -52,7 +53,7 @@ same SDK as Pro (7.0.5.39292).
 
 ```powershell
 $env:ZOOM_SDK_DIR = 'C:\path\to\zoom-sdk-windows-7.0.5.39292\x64'   # folder with h\zoom_sdk.h and lib\sdk.lib
-.\scripts\build.ps1            # native node + real and fake engines + app, runs 34 native + 24 .NET tests
+.\scripts\build.ps1            # native node + real and fake engines + app, runs the native and .NET test suites
 .\scripts\build.ps1 -Dist      # also stages dist\CoreVideoEdge (app + node + engine + SDK runtime) for an Edge machine
 .\scripts\build.ps1 -NoZoomEngine   # a machine without the SDK: fake engine only
 ```
@@ -69,7 +70,7 @@ dotnet test app\CoreVideoEdge.Tests\CoreVideoEdge.Tests.csproj -c Release -p:Pla
 
 Outputs: `build\bin\corevideo-edge.exe`, `corevideo-zoom-engine.exe` (with the
 SDK runtime copied beside it), `corevideo-zoom-engine-fake.exe`;
-`app\CoreVideoEdge.App\bin\x64\Release\net9.0-windows\win-x64\CoreVideoEdge.exe`.
+`app\CoreVideoEdge.Desktop\bin\x64\Release\net9.0\CoreVideoEdge.exe`.
 
 ## Prove it end to end (no meeting, no desktop)
 
@@ -136,31 +137,59 @@ measured yet.**
 ## Run the operator app
 
 ```powershell
-.\app\CoreVideoEdge.App\bin\x64\Release\net9.0-windows\win-x64\CoreVideoEdge.exe          # real Zoom
-.\app\CoreVideoEdge.App\bin\x64\Release\net9.0-windows\win-x64\CoreVideoEdge.exe --fake   # synthetic meeting
+.\app\CoreVideoEdge.Desktop\bin\x64\Release\net9.0\CoreVideoEdge.exe          # real Zoom
+.\app\CoreVideoEdge.Desktop\bin\x64\Release\net9.0\CoreVideoEdge.exe --fake   # synthetic meeting (header says FAKE ENGINE)
 ```
 
 The app finds `corevideo-edge.exe` beside itself, then in `build\bin` up the
 tree, or at `COREVIDEO_EDGE_NODE`. Config lives in
 `%LOCALAPPDATA%\CoreVideoEdge\edge.json`; the node log in `edge-node.log`
 beside it; Zoom tokens in `zoom-oauth.json` (DPAPI-encrypted, current user).
+Screens: **Connect**, **Routing**, **Monitor**, **Record** (Ctrl+1-4). The
+header always shows the meeting, Engine, Routed n/cap, ISO n/cap, measured disk
+free and the REC tally; failures sit in a banner under it until they clear.
 
-1. **Sign in with Zoom** using this node's own Zoom account, not the account
-   CoreVideo Pro uses. Two clients on one account collide. The app registers
-   `corevideo://` (the only return URI the broker accepts) for the current user
-   when you click Sign in. On a machine that also runs CoreVideo Pro, whichever
-   app signed in last owns that link.
-2. Paste the full join link (with `pwd=`) and **Join**. The node joins with
-   its camera off and its mic muted (enforced for the whole meeting).
-3. Raw data needs permission. The host allows this node to record (or makes it
-   co-host), or the node joins with a token: `COREVIDEO_ZOOM_ON_BEHALF_TOKEN`,
-   `COREVIDEO_ZOOM_USER_ZAK`, `COREVIDEO_ZOOM_APP_PRIVILEGE_TOKEN`. The
-   Meeting panel shows what the engine reports.
-4. Tick **Subscribe** for the guests Pro is not pulling (at most 6). The
-   *Received* column shows the resolution Zoom is actually delivering.
-5. Choose a record folder and **Start recording**. ISO health shows frames,
-   seconds of audio, lost arrivals, the encoder actually in use, and warnings.
-   **Stop recording** finalizes every file and the manifest.
+1. **Connect: sign in with Zoom** using this node's own Zoom account, not the
+   account CoreVideo Pro uses. Two clients on one account collide. The app
+   registers `corevideo://` (the only return URI the broker accepts) for the
+   current user when you click Sign in. On a machine that also runs CoreVideo
+   Pro, whichever app signed in last owns that link.
+2. **Connect: join.** Paste the full join link (with `pwd=`). The node joins
+   with its camera off and its mic muted (enforced for the whole meeting).
+3. **Connect: Engine.** The latching Engine key asks Zoom for raw media (and
+   the host for record permission). It shows Requesting until the engine
+   reports raw media active. Tokens also work: `COREVIDEO_ZOOM_ON_BEHALF_TOKEN`,
+   `COREVIDEO_ZOOM_USER_ZAK`, `COREVIDEO_ZOOM_APP_PRIVILEGE_TOKEN`.
+4. **Routing.** A crosspoint grid: click a Subscribe cell to route a guest (the
+   node assigns the next free slot, up to the cap), the ISO band arms that
+   slot's ISO. Cells stay pending until the node confirms; refusals appear on
+   the row. **Send to Pro** sends every routed slot to CoreVideo Pro over NDI or
+   SRT (see `docs/PROTOCOL.md` `set-feeds`).
+5. **Monitor.** One tile per routed slot from the node's preview files
+   (`docs/PROTOCOL.md` "Preview frames"): picture, measured fps and size,
+   audio meter, ISO and feed health. Enter opens a larger view.
+6. **Record.** Folder, file prefix, 1080p | 720p and Source | 30 | 60, then
+   **Start recording**. The table shows frames, lost, held, cadence and size per
+   ISO. **Stop recording** (confirmed) finalizes every file and the manifest.
+
+Screenshots of every screen and state: `docs/screenshots/`. They are rendered
+headlessly (no window) from node state lines captured off the fake engine:
+
+```powershell
+node scripts\capture-ui-fixtures.mjs build\bin\corevideo-edge.exe out\captures D:\EdgeISO main   # also: move, feeds
+.\scripts\render-screenshots.ps1
+# one screen: CoreVideoEdge.exe --screenshot <state.json> <connect|routing|monitor|record> <out.png> [--preview-dir <dir>] [--signed-in]
+```
+
+### macOS (not built yet)
+
+`CoreVideoEdge.Core` and the app target plain `net9.0`. Two seams are
+Windows-only today and fail loudly elsewhere: token protection
+(`EdgeSecretProtection`: DPAPI on Windows; macOS refuses to store tokens until
+the Keychain store is written) and the `corevideo://` registration
+(`IUrlSchemeRegistrar`: HKCU on Windows; on macOS the scheme must be declared in
+the bundle's `Info.plist` `CFBundleURLTypes`, TODO). Reduced motion reads
+`SPI_GETCLIENTAREAANIMATION` on Windows only.
 
 Headless (no UI), the same node with a config file:
 

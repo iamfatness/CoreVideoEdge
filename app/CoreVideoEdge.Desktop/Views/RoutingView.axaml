@@ -1,0 +1,264 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CoreVideoEdge.Desktop.ViewModels"
+             xmlns:c="using:CoreVideoEdge.Desktop.Controls"
+             xmlns:core="using:CoreVideoEdge"
+             xmlns:v="using:CoreVideoEdge.Desktop.Views"
+             x:Class="CoreVideoEdge.Desktop.Views.RoutingView"
+             x:DataType="vm:RoutingViewModel">
+  <Grid RowDefinitions="Auto,*">
+    <!-- ================================================= toolbar -->
+    <Border Grid.Row="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1"
+            Padding="16,6">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" IsVisible="{Binding CapVisible}">
+          <TextBlock Classes="mono" Text="{Binding SubscribedText}" VerticalAlignment="Center" AutomationProperties.Name="{Binding SubscribedText}" />
+          <TextBlock Classes="mono" Text="{Binding IsoText}" VerticalAlignment="Center" AutomationProperties.Name="{Binding IsoText}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="12" IsVisible="{Binding !NotJoined}">
+          <Border Classes="segtrack" AutomationProperties.Name="Participant filter">
+            <StackPanel Orientation="Horizontal" Spacing="2">
+              <Button Classes="segment" Classes.active="{Binding VideoOnOnly}" Content="{Binding VideoOnLabel}" Command="{Binding ShowVideoOnCommand}" />
+              <Button Classes="segment" Classes.active="{Binding ShowAll}" Content="{Binding AllLabel}" Command="{Binding ShowAllCommand}" />
+            </StackPanel>
+          </Border>
+          <Grid Width="240">
+            <TextBox Text="{Binding Search}" Watermark="Search participants" Padding="32,8,10,8" AutomationProperties.Name="Search participants" />
+            <c:Icon Data="{StaticResource IconSearch}" Foreground="{StaticResource Text2Brush}" Margin="10,0,0,0"
+                    HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False" />
+          </Grid>
+          <Border Classes="segtrack" IsVisible="{Binding Narrow}" AutomationProperties.Name="Band">
+            <StackPanel Orientation="Horizontal" Spacing="2">
+              <Button Classes="segment" Classes.active="{Binding ShowSubscribeBand}" Content="Subscribe" Command="{Binding ShowSubscribeBandCommand}" />
+              <Button Classes="segment" Classes.active="{Binding ShowIsoBand}" Content="ISO" Command="{Binding ShowIsoBandCommand}" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,*">
+      <!-- ================================================= left: roster + send to Pro -->
+      <Border Grid.Column="0" x:Name="LeftColumn" Width="320" Background="{StaticResource PanelBrush}"
+              BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,1,0">
+        <DockPanel>
+          <!-- Send to Pro -->
+          <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0" Padding="16"
+                  IsVisible="{Binding Feeds.Visible}">
+            <v:FeedsView DataContext="{Binding Feeds}" />
+          </Border>
+
+          <TextBlock DockPanel.Dock="Top" Classes="label" Text="Participants" Margin="16,12,16,4" IsVisible="{Binding MatrixVisible}" />
+          <ListBox ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow}" IsVisible="{Binding MatrixVisible}"
+                   AutomationProperties.Name="Participants">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ParticipantRowViewModel">
+                <Grid ColumnDefinitions="Auto,*,Auto" AutomationProperties.Name="{Binding AccessibleName}">
+                  <Panel Width="16" Height="16" Margin="0,0,8,0" VerticalAlignment="Center">
+                    <c:Icon Data="{StaticResource IconVideo}" Foreground="{StaticResource Text2Brush}" IsVisible="{Binding VideoOn}" />
+                    <c:Icon Data="{StaticResource IconVideoOff}" Foreground="{StaticResource Text2Brush}" IsVisible="{Binding !VideoOn}" />
+                  </Panel>
+                  <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding DisplayName}" FontWeight="Medium" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding StatusWords}" Classes="label" />
+                  </StackPanel>
+                  <Border Grid.Column="2" Classes="tagbox" Background="{StaticResource AccentBrush}" IsVisible="{Binding HasSlot}">
+                    <TextBlock Classes="tag" Text="{Binding SlotTag}" Foreground="{StaticResource OnAccentBrush}" />
+                  </Border>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <!-- ================================================= matrix -->
+      <DockPanel Grid.Column="1">
+      <!-- narrow windows: no left column, so Send to Pro sits above the matrix -->
+      <Border DockPanel.Dock="Top" x:Name="TopFeeds" IsVisible="False" Background="{StaticResource PanelBrush}"
+              BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1" Padding="16,12">
+        <v:FeedsView DataContext="{Binding Feeds}" MaxWidth="560" HorizontalAlignment="Left" />
+      </Border>
+      <Grid x:Name="MatrixHost" Margin="16,12,16,16">
+        <!-- empty: not joined -->
+        <Panel IsVisible="{Binding NotJoined}" VerticalAlignment="Top" MaxWidth="520" HorizontalAlignment="Left" Margin="0,12,0,0">
+          <Rectangle Stroke="{StaticResource CtlBorderBrush}" StrokeThickness="1" StrokeDashArray="4,3" RadiusX="8" RadiusY="8" />
+          <StackPanel Margin="24" Spacing="12">
+            <TextBlock Classes="section" Text="No meeting" />
+            <TextBlock Classes="secondary" Text="Join a meeting on Connect to see participants." TextWrapping="Wrap" />
+            <Button Classes="ghost" HorizontalAlignment="Left" Content="Go to Connect"
+                    Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).GoToConnectCommand}" />
+          </StackPanel>
+        </Panel>
+        <!-- loading: skeleton rows for at most 2 s, then a counted wait -->
+        <StackPanel IsVisible="{Binding RosterSkeleton}" Spacing="16" Margin="0,24,0,0" Width="400" HorizontalAlignment="Left">
+          <Border Classes="skeleton" Width="240" HorizontalAlignment="Left" />
+          <Border Classes="skeleton" Width="320" HorizontalAlignment="Left" />
+          <Border Classes="skeleton" Width="200" HorizontalAlignment="Left" />
+        </StackPanel>
+        <TextBlock IsVisible="{Binding RosterWaiting}" Text="{Binding RosterWaitText}" Classes="secondary" Margin="0,24,0,0" />
+        <!-- empty: nobody with video -->
+        <Panel IsVisible="{Binding NoVideoOn}" VerticalAlignment="Top" MaxWidth="520" HorizontalAlignment="Left" Margin="0,12,0,0">
+          <Rectangle Stroke="{StaticResource CtlBorderBrush}" StrokeThickness="1" StrokeDashArray="4,3" RadiusX="8" RadiusY="8" />
+          <StackPanel Margin="24" Spacing="12">
+            <TextBlock Classes="section" Text="No one has video on" />
+            <TextBlock Classes="secondary" Text="Participants appear here when their camera starts." TextWrapping="Wrap" />
+            <Button Classes="ghost" HorizontalAlignment="Left" Content="Show all participants" Command="{Binding ShowAllCommand}" />
+          </StackPanel>
+        </Panel>
+        <Panel IsVisible="{Binding NobodyHere}" VerticalAlignment="Top" MaxWidth="520" HorizontalAlignment="Left" Margin="0,12,0,0">
+          <Rectangle Stroke="{StaticResource CtlBorderBrush}" StrokeThickness="1" StrokeDashArray="4,3" RadiusX="8" RadiusY="8" />
+          <StackPanel Margin="24" Spacing="12">
+            <TextBlock Classes="section" Text="Only this node is here" />
+            <TextBlock Classes="secondary" Text="Guests appear here as they join the meeting." TextWrapping="Wrap" />
+          </StackPanel>
+        </Panel>
+        <TextBlock IsVisible="{Binding NoSearchMatch}" Classes="secondary" Text="No participant matches the search." Margin="0,24,0,0" />
+
+        <DockPanel IsVisible="{Binding MatrixVisible}">
+          <!-- departed guests: slot held for a rejoin -->
+          <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Departed}" IsVisible="{Binding HasDeparted}" Margin="0,0,0,8">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="core:EdgeSubscription">
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
+                  <c:Icon Data="{StaticResource IconAlertTriangle}" Foreground="{StaticResource WarnBrush}" VerticalAlignment="Center" />
+                  <TextBlock VerticalAlignment="Center">
+                    <Run Text="{Binding Name}" FontWeight="Medium" />
+                    <Run Text=" left the meeting. Slot " Foreground="{StaticResource Text2Brush}" />
+                    <Run Text="{Binding Slot, StringFormat='S{0}'}" FontFamily="{StaticResource MonoFont}" />
+                    <Run Text=" is held for their return." Foreground="{StaticResource Text2Brush}" />
+                  </TextBlock>
+                  <Button Classes="link" Content="Free the slot" CommandParameter="{Binding Slot}"
+                          Command="{Binding $parent[UserControl].((vm:RoutingViewModel)DataContext).FreeSlotCommand}" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <!-- sticky header row -->
+          <Grid DockPanel.Dock="Top" Height="44" ColumnDefinitions="240,Auto,16,Auto">
+            <TextBlock Grid.Column="0" Classes="label" Text="Participant" VerticalAlignment="Bottom" Margin="0,0,0,6" />
+            <StackPanel Grid.Column="1" IsVisible="{Binding SubscribeBandVisible}">
+              <TextBlock Classes="label" Text="Subscribe" />
+              <ItemsControl ItemsSource="{Binding SubscribeHeaders}">
+                <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:SlotHeaderViewModel">
+                    <StackPanel Width="80" ToolTip.Tip="{Binding Occupant}" AutomationProperties.Name="{Binding AccessibleName}">
+                      <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center">
+                        <TextBlock Classes="mono" Text="{Binding Label}" />
+                        <Ellipse Width="6" Height="6" VerticalAlignment="Center" IsVisible="{Binding HasDot}"
+                                 Fill="{Binding Tone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
+                      </StackPanel>
+                      <TextBlock Classes="mono" FontSize="12" Text="{Binding Raster}" HorizontalAlignment="Center"
+                                 Foreground="{StaticResource Text2Brush}" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+            <StackPanel Grid.Column="3" IsVisible="{Binding IsoBandVisible}">
+              <TextBlock Classes="label" Text="ISO" />
+              <ItemsControl ItemsSource="{Binding IsoHeaders}">
+                <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:SlotHeaderViewModel">
+                    <StackPanel Width="36" ToolTip.Tip="{Binding Occupant}" AutomationProperties.Name="{Binding AccessibleName}">
+                      <TextBlock Classes="mono" Text="{Binding Label}" HorizontalAlignment="Center" />
+                      <Ellipse Width="6" Height="6" HorizontalAlignment="Center" Margin="0,4,0,0" IsVisible="{Binding HasDot}"
+                               Fill="{Binding Tone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Grid>
+          <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource HairlineBrush}" />
+
+          <ScrollViewer>
+            <ItemsControl x:Name="Matrix" ItemsSource="{Binding Rows}" AutomationProperties.Name="Routing matrix">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ParticipantRowViewModel">
+                  <Border Background="Transparent" Classes.selected="{Binding Selected}" CornerRadius="4" Padding="0,2">
+                    <Border.Styles>
+                      <Style Selector="Border.selected"><Setter Property="Background" Value="{StaticResource AccentTintBrush}" /></Style>
+                    </Border.Styles>
+                    <Grid ColumnDefinitions="240,Auto,16,Auto" RowDefinitions="Auto,Auto">
+                      <Grid Grid.Column="0" ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center" Margin="0,0,8,0"
+                            AutomationProperties.Name="{Binding AccessibleName}">
+                        <Panel Width="16" Height="16" Margin="4,0,8,0">
+                          <c:Icon Data="{StaticResource IconVideo}" Foreground="{StaticResource Text2Brush}" IsVisible="{Binding VideoOn}" />
+                          <c:Icon Data="{StaticResource IconVideoOff}" Foreground="{StaticResource Text2Brush}" IsVisible="{Binding !VideoOn}" />
+                        </Panel>
+                        <TextBlock Grid.Column="1" Text="{Binding DisplayName}" FontWeight="Medium" TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding DisplayName}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Classes="mono" Text="{Binding Offered}" Foreground="{StaticResource Text2Brush}"
+                                   VerticalAlignment="Center" Margin="8,0,0,0" IsVisible="{Binding HasOffered}" />
+                      </Grid>
+                      <ItemsControl Grid.Column="1" ItemsSource="{Binding SubscribeCells}"
+                                    IsVisible="{Binding $parent[UserControl].((vm:RoutingViewModel)DataContext).SubscribeBandVisible}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:CellViewModel">
+                            <Panel Width="80" Height="32">
+                              <Button Classes="cell" Classes.routed="{Binding IsRouted}" Classes.pending="{Binding IsPending}"
+                                      Classes.failed="{Binding IsFailed}" IsVisible="{Binding IsVisible}"
+                                      IsEnabled="{Binding IsInteractive}" Command="{Binding ToggleCommand}"
+                                      HorizontalAlignment="Center" ToolTip.Tip="{Binding Tip}" ToolTip.ShowOnDisabled="True"
+                                      AutomationProperties.Name="{Binding AccessibleName}" AutomationProperties.HelpText="{Binding Tip}">
+                                <Panel>
+                                  <Ellipse Width="8" Height="8" Fill="{StaticResource OnAccentBrush}" IsVisible="{Binding IsRouted}" />
+                                  <Rectangle Width="26" Height="26" RadiusX="4" RadiusY="4" Stroke="{StaticResource AccentBrush}"
+                                             StrokeDashArray="3,2" IsVisible="{Binding IsPending}" />
+                                  <c:Icon Classes="spin" Width="12" Height="12" Data="{StaticResource IconLoader}"
+                                          Foreground="{StaticResource AccentBrush}" IsVisible="{Binding IsPending}" RenderTransformOrigin="50%,50%" />
+                                  <c:Icon Width="14" Height="14" Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}"
+                                          IsVisible="{Binding IsFailed}" />
+                                </Panel>
+                              </Button>
+                            </Panel>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <ItemsControl Grid.Column="3" ItemsSource="{Binding IsoCells}"
+                                    IsVisible="{Binding $parent[UserControl].((vm:RoutingViewModel)DataContext).IsoBandVisible}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:CellViewModel">
+                            <Panel Width="36" Height="32">
+                              <Button Classes="cell" Classes.armed="{Binding IsArmed}" Classes.recording="{Binding IsRecording}"
+                                      Classes.pending="{Binding IsPending}" Classes.failed="{Binding IsFailed}"
+                                      IsVisible="{Binding IsVisible}" IsEnabled="{Binding IsInteractive}" Command="{Binding ToggleCommand}"
+                                      HorizontalAlignment="Center" ToolTip.Tip="{Binding Tip}" ToolTip.ShowOnDisabled="True"
+                                      AutomationProperties.Name="{Binding AccessibleName}" AutomationProperties.HelpText="{Binding Tip}">
+                                <Panel>
+                                  <Ellipse Width="8" Height="8" Stroke="{StaticResource AccentBrush}" StrokeThickness="1.5" IsVisible="{Binding IsArmed}" />
+                                  <Ellipse Width="8" Height="8" Fill="{StaticResource RecBrush}" IsVisible="{Binding IsRecording}" />
+                                  <Rectangle Width="26" Height="26" RadiusX="4" RadiusY="4" Stroke="{StaticResource AccentBrush}"
+                                             StrokeDashArray="3,2" IsVisible="{Binding IsPending}" />
+                                  <c:Icon Classes="spin" Width="12" Height="12" Data="{StaticResource IconLoader}"
+                                          Foreground="{StaticResource AccentBrush}" IsVisible="{Binding IsPending}" RenderTransformOrigin="50%,50%" />
+                                  <c:Icon Width="14" Height="14" Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}"
+                                          IsVisible="{Binding IsFailed}" />
+                                </Panel>
+                              </Button>
+                            </Panel>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <!-- detail line: the node's refusal, or pending -->
+                      <TextBlock Grid.Row="1" Grid.ColumnSpan="4" Margin="28,0,0,4" FontSize="12" LineHeight="16" TextWrapping="Wrap"
+                                 Text="{Binding Detail}" IsVisible="{Binding HasDetail}"
+                                 Classes.error="{Binding DetailIsError}" Classes.secondary="{Binding !DetailIsError}" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Grid>
+      </DockPanel>
+    </Grid>
+  </Grid>
+</UserControl>

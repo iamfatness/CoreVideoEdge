@@ -1,0 +1,418 @@
+<!--
+  CoreVideo Edge control styles. Tokens only (Theme/Tokens.axaml), never raw hex.
+  Motion: 120 ms colour on hover/press, 180 ms state changes, ease-out; nothing
+  animates width/height; everything is off under reduced motion (Window.reduced).
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:CoreVideoEdge.Desktop.Controls">
+
+  <!-- ===================================================== base -->
+  <Style Selector="Window">
+    <Setter Property="Background" Value="{StaticResource BgBrush}" />
+    <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+  </Style>
+  <Style Selector="TextBlock">
+    <Setter Property="LineHeight" Value="20" />
+  </Style>
+
+  <!-- Visible keyboard focus: 2px focus blue, 2px offset (Volt spec). -->
+  <Style Selector=":is(Control)">
+    <Setter Property="FocusAdorner">
+      <FocusAdornerTemplate>
+        <Border BorderThickness="2" BorderBrush="{StaticResource FocusBrush}" CornerRadius="8" Margin="-4" />
+      </FocusAdornerTemplate>
+    </Setter>
+  </Style>
+
+  <!-- ===================================================== type scale -->
+  <Style Selector="TextBlock.title">
+    <Setter Property="FontSize" Value="18" />
+    <Setter Property="LineHeight" Value="24" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="LetterSpacing" Value="-0.18" />
+  </Style>
+  <Style Selector="TextBlock.section">
+    <Setter Property="FontSize" Value="15" />
+    <Setter Property="LineHeight" Value="20" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="TextBlock.label">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="LineHeight" Value="16" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="LetterSpacing" Value="0.12" />
+    <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+  </Style>
+  <Style Selector="TextBlock.secondary">
+    <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+  </Style>
+  <Style Selector="TextBlock.error">
+    <Setter Property="Foreground" Value="{StaticResource ErrorTextBrush}" />
+  </Style>
+  <Style Selector="TextBlock.warn">
+    <Setter Property="Foreground" Value="{StaticResource WarnBrush}" />
+  </Style>
+  <Style Selector="TextBlock.mono">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="LineHeight" Value="16" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="LetterSpacing" Value="0.24" />
+  </Style>
+  <Style Selector="TextBlock.mono.table">
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="LineHeight" Value="20" />
+  </Style>
+  <Style Selector="TextBlock.readout">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="22" />
+    <Setter Property="LineHeight" Value="28" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <!-- Tally tag: uppercase mono, only ever on a coloured fill (REC, ISO, LIVE). -->
+  <Style Selector="TextBlock.tag">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="LineHeight" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="LetterSpacing" Value="1.2" />
+  </Style>
+
+  <!-- ===================================================== containers -->
+  <Style Selector="Border.panel">
+    <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusPanel}" />
+    <Setter Property="Padding" Value="16" />
+  </Style>
+  <Style Selector="Border.tagbox">
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusSmall}" />
+    <Setter Property="Padding" Value="5,2" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <!-- Status pill: dot + word (+ icon for warn/error). Radius 4, never fully round. -->
+  <Style Selector="Border.pill">
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusSmall}" />
+    <Setter Property="Padding" Value="8,3" />
+    <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Focusable" Value="False" />
+  </Style>
+
+  <!-- Transient-state pulse (Connecting/Requesting/Waiting). 1.2 s, opacity only. -->
+  <Style Selector="Window:not(.reduced) Ellipse.pulse">
+    <Style.Animations>
+      <Animation Duration="0:0:1.2" IterationCount="Infinite">
+        <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+        <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.35" /></KeyFrame>
+        <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+      </Animation>
+    </Style.Animations>
+  </Style>
+  <!-- Skeleton loop for the first 2 s of a roster load. -->
+  <Style Selector="Window:not(.reduced) Border.skeleton">
+    <Style.Animations>
+      <Animation Duration="0:0:1.4" IterationCount="Infinite">
+        <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.5" /></KeyFrame>
+        <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.8" /></KeyFrame>
+        <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.5" /></KeyFrame>
+      </Animation>
+    </Style.Animations>
+  </Style>
+  <Style Selector="Border.skeleton">
+    <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusSmall}" />
+    <Setter Property="Height" Value="12" />
+  </Style>
+  <!-- Spinner: the only other infinite motion (a loading indicator). -->
+  <Style Selector="Window:not(.reduced) c|Icon.spin">
+    <Setter Property="RenderTransform" Value="rotate(0deg)" />
+    <Style.Animations>
+      <Animation Duration="0:0:0.9" IterationCount="Infinite">
+        <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0" /></KeyFrame>
+        <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="360" /></KeyFrame>
+      </Animation>
+    </Style.Animations>
+  </Style>
+
+  <!-- ===================================================== buttons -->
+  <Style Selector="Button">
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="MinHeight" Value="36" />
+    <Setter Property="Padding" Value="14,0" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusControl}" />
+    <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource CtlBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}"
+                Padding="{TemplateBinding Padding}">
+          <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                            Foreground="{TemplateBinding Foreground}"
+                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="Window:not(.reduced) Button">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.12" Easing="0.16,1,0.3,1" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.12" />
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="Button:pointerover">
+    <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+  </Style>
+  <Style Selector="Button:pressed">
+    <Setter Property="Background" Value="{StaticResource HoverBrush}" />
+  </Style>
+  <Style Selector="Button:disabled">
+    <Setter Property="Foreground" Value="{StaticResource TextDisabledBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource HairlineBrush}" />
+    <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+    <Setter Property="Cursor" Value="Arrow" />
+  </Style>
+
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}" />
+    <Setter Property="MinHeight" Value="40" />
+    <Setter Property="Padding" Value="16,0" />
+  </Style>
+  <Style Selector="Button.primary:pointerover">
+    <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
+  </Style>
+  <Style Selector="Button.primary:pressed">
+    <Setter Property="Background" Value="{StaticResource AccentPressBrush}" />
+  </Style>
+  <Style Selector="Button.primary:disabled">
+    <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource HairlineBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource TextDisabledBrush}" />
+  </Style>
+
+  <Style Selector="Button.ghost">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.ghost:pointerover">
+    <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+  </Style>
+
+  <Style Selector="Button.link">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="4,0" />
+    <Setter Property="MinHeight" Value="28" />
+    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+    <Setter Property="FontWeight" Value="Medium" />
+  </Style>
+  <Style Selector="Button.link:pointerover">
+    <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+  </Style>
+
+  <!-- Recording: the only red fill, and only while it is true. -->
+  <Style Selector="Button.rec">
+    <Setter Property="Background" Value="{StaticResource RecBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource RecBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource OnRecBrush}" />
+  </Style>
+  <Style Selector="Button.rec:pointerover">
+    <Setter Property="Background" Value="{StaticResource RecBrush}" />
+    <Setter Property="Opacity" Value="0.92" />
+  </Style>
+
+  <!-- Underline tabs (header nav). -->
+  <Style Selector="Button.tab">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="MinHeight" Value="48" />
+    <Setter Property="Height" Value="48" />
+    <Setter Property="VerticalContentAlignment" Value="Stretch" />
+    <Setter Property="Padding" Value="12,0" />
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+  </Style>
+  <Style Selector="Button.tab:pointerover">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+  </Style>
+  <Style Selector="Button.tab.active">
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+  </Style>
+
+  <!-- Segmented control: track surface, active segment raised + 1px ctl-border. -->
+  <Style Selector="Border.segtrack">
+    <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusPanel}" />
+    <Setter Property="Padding" Value="3" />
+    <Setter Property="Height" Value="36" />
+  </Style>
+  <Style Selector="Button.segment">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="Height" Value="30" />
+    <Setter Property="Padding" Value="12,0" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+  </Style>
+  <Style Selector="Button.segment:pointerover">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+  </Style>
+  <Style Selector="Button.segment.active">
+    <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource CtlBorderBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+  </Style>
+  <!-- Locked while recording: read-only, the value stays at full text colour. -->
+  <Style Selector="Button.segment.active:disabled">
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+    <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource CtlBorderBrush}" />
+  </Style>
+
+  <!-- Engine: a latching hardware-style key, 48 px. -->
+  <Style Selector="Button.engine">
+    <Setter Property="MinHeight" Value="48" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="Padding" Value="14,0" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="Button.engine.live">
+    <Setter Property="Background" Value="{StaticResource LiveTintBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource LiveBrush}" />
+  </Style>
+  <Style Selector="Button.engine.warn">
+    <Setter Property="Background" Value="{StaticResource WarnTintBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource WarnBrush}" />
+  </Style>
+  <Style Selector="Button.engine.error">
+    <Setter Property="Background" Value="{StaticResource ErrorTintBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource ErrorTextBrush}" />
+  </Style>
+
+  <!-- ===================================================== matrix cell -->
+  <Style Selector="Button.cell">
+    <Setter Property="Width" Value="28" />
+    <Setter Property="Height" Value="28" />
+    <Setter Property="MinHeight" Value="28" />
+    <Setter Property="Margin" Value="2" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusSmall}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{StaticResource CtlBorderBrush}" />
+  </Style>
+  <Style Selector="Window:not(.reduced) Button.cell">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.18" Easing="0.16,1,0.3,1" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.18" />
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="Button.cell:pointerover">
+    <Setter Property="Background" Value="{StaticResource HoverBrush}" />
+  </Style>
+  <Style Selector="Button.cell.routed">
+    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+  </Style>
+  <Style Selector="Button.cell.routed:pointerover">
+    <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+  </Style>
+  <Style Selector="Button.cell.armed, Button.cell.recording">
+    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+  </Style>
+  <Style Selector="Button.cell.pending">
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.cell.failed">
+    <Setter Property="BorderBrush" Value="{StaticResource ErrorTextBrush}" />
+  </Style>
+  <Style Selector="Button.cell:disabled">
+    <Setter Property="BorderBrush" Value="{StaticResource TextDisabledBrush}" />
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.cell.pending:disabled">
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.cell.recording:disabled">
+    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+  </Style>
+
+  <!-- ===================================================== inputs -->
+  <Style Selector="TextBox">
+    <Setter Property="Background" Value="{StaticResource WellBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource CtlBorderBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusControl}" />
+    <Setter Property="MinHeight" Value="36" />
+    <Setter Property="Padding" Value="10,8" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="SelectionBrush" Value="{StaticResource AccentPressBrush}" />
+    <Setter Property="SelectionForegroundBrush" Value="{StaticResource OnAccentBrush}" />
+    <Setter Property="CaretBrush" Value="{StaticResource AccentBrush}" />
+  </Style>
+  <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource WellBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Text2Brush}" />
+  </Style>
+  <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource WellBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource FocusBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="TextBox:disabled /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource WellBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource HairlineBrush}" />
+  </Style>
+  <Style Selector="TextBox:disabled">
+    <Setter Property="Foreground" Value="{StaticResource TextDisabledBrush}" />
+  </Style>
+  <Style Selector="TextBox /template/ TextBlock#PART_Watermark, TextBox /template/ TextBlock#PART_FloatingWatermark">
+    <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+  </Style>
+
+  <Style Selector="ToolTip">
+    <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusPanel}" />
+    <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Padding" Value="10,6" />
+  </Style>
+
+  <Style Selector="ListBox">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBoxItem">
+    <Setter Property="Padding" Value="12,6" />
+    <Setter Property="MinHeight" Value="36" />
+  </Style>
+  <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource HoverBrush}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource AccentTintBrush}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource AccentTintBrush}" />
+  </Style>
+</Styles>
