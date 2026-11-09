@@ -1,0 +1,1055 @@
+// ============================================================================
+// CoreVideo Pro — SYNTHETIC Zoom capture engine (a fake `corevideo-zoom-engine`)
+// ----------------------------------------------------------------------------
+// This executable speaks the EXACT same named-pipe + shared-memory IPC protocol
+// as the real Zoom engine (native/zoom-engine/engine/main.cpp), but contains NO
+// Zoom SDK dependency. It fabricates a multi-participant meeting so we can
+// reproduce and validate the multi-participant crash/freeze scenario WITHOUT a
+// real Zoom call.
+//
+// What it does, mirroring the real engine's wire shapes:
+//   • Creates the two named pipes (P2E inbound, E2P outbound) and waits for the
+//     core to connect — exactly like main.cpp's ipc_setup().
+//   • Emits {"cmd":"ready"} on connect.
+//   • On `init`  → emits {"cmd":"auth_ok"}.
+//   • On `join`  → emits {"cmd":"joined"} then a {"cmd":"participants",...}
+//                  roster with 3 participants (numeric ids, has_video=true,
+//                  names "mv1","mv2","Producer").
+//   • On `subscribe` (mode != screenshare) → starts writing synthetic I420
+//     frames to that source's shared-memory region at ~30 fps and emits the
+//     matching {"cmd":"frame",...} events with the exact JSON shape the core
+//     expects (source_uuid, participant_id, w, h).
+//   • Churn (this is what fail-fasts the WinUI):
+//       - every ~2s rotates the active_speaker,
+//       - every ~10s a 4th participant ("mv4") leaves + re-joins so the roster
+//         oscillates 3 <-> 4, driving multiview tile add/remove churn.
+//
+// Extra robustness for headless validation: by default it AUTO-subscribes every
+// video-on participant (source_uuid "participant-video-<id>-auto") so frames
+// flow into the core's I420->GPU convert + compositor path even if the parent
+// never sends explicit `subscribe` commands. Disable with
+// COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE=0.
+//
+// Env knobs:
+//   COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE  "1" (default) / "0"
+//   COREVIDEO_FAKE_ENGINE_RES            auto-target resolution: 0=360p 1=720p 2=1080p (default 2)
+//   COREVIDEO_FAKE_ENGINE_PARTICIPANTS   baseline participant count (default 3, max 16)
+//   COREVIDEO_FAKE_ENGINE_FPS            frame cadence (default 30; use 60 for
+//                                        the 1080p60 load the product targets)
+//   COREVIDEO_FAKE_ENGINE_LOG            optional path for a standalone diag log
+//   COREVIDEO_FAKE_PRIMARY_COLORS        "1": three distinct animated primary colors for Sources identity QA
+//   COREVIDEO_FAKE_AUTH_DELAY_MS         synthetic SDK auth stall (0 by default, max 60000)
+//   COREVIDEO_FAKE_JOIN_DELAY_MS         synthetic meeting join stall (0 by default, max 60000)
+//
+// Windows-focused; a minimal POSIX fallback keeps the file portable so the
+// CMake target stays green on the Linux stub build.
+// ============================================================================
+
+// engine-ipc.h selects its platform branch on `WIN32` (which CMake defines for
+// Windows targets but a bare `cl` invocation does not). Mirror that define from
+// the standard `_WIN32` so this file builds identically under CMake or direct cl.
+#if defined(_WIN32) && !defined(WIN32)
+#define WIN32 1
+#endif
+
+#include "engine-ipc.h"
+#include "iso-video-ring.h"
+#include "iso-video-demand.h"
+#include "engine-writer.h"  // EngineIpc::init / EngineIpc::write (thread-safe)
+
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+// ── Standalone diagnostic log (independent of the core's media-core.log) ──────
+static void diag(const std::string& line) {
+    const char* path = std::getenv("COREVIDEO_FAKE_ENGINE_LOG");
+    if (!path || !*path) return;
+    std::ofstream out(path, std::ios::app);
+    if (out) out << line << "\n";
+}
+
+// ── Minimal JSON field extraction (matches main.cpp's helpers) ───────────────
+static std::string json_str(const std::string& json, const std::string& key) {
+    const std::string needle = "\"" + key + "\":\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return {};
+    pos += needle.size();
+    std::string result;
+    while (pos < json.size()) {
+        char c = json[pos++];
+        if (c == '\\') { if (pos < json.size()) pos++; continue; }
+        if (c == '"') break;
+        result += c;
+    }
+    return result;
+}
+
+static uint32_t json_uint(const std::string& json, const std::string& key) {
+    const std::string needle = "\"" + key + "\":";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return 0;
+    pos += needle.size();
+    try { return static_cast<uint32_t>(std::stoul(json.substr(pos))); }
+    catch (...) { return 0; }
+}
+
+static std::string json_escape(const std::string& in) {
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in) {
+        switch (c) {
+        case '\\': out += "\\\\"; break;
+        case '"': out += "\\\""; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default: out += c; break;
+        }
+    }
+    return out;
+}
+
+// ── Platform pipe setup (mirrors main.cpp; no message pump needed — no COM) ───
+#if defined(WIN32)
+static bool ipc_connect_blocking(HANDLE pipe) {
+    BOOL ok = ConnectNamedPipe(pipe, nullptr);
+    return ok || GetLastError() == ERROR_PIPE_CONNECTED;
+}
+
+static bool ipc_setup(IpcFd& p2e, IpcFd& e2p, const std::string& token) {
+    // Engine CREATES the pipes (server) and the core CONNECTS (client) — this is
+    // the same ownership split as the real engine.
+    p2e = CreateNamedPipeA(ipc_pipe_p2e(token).c_str(), PIPE_ACCESS_INBOUND,
+                           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                           1, 65536, 65536, 0, nullptr);
+    e2p = CreateNamedPipeA(ipc_pipe_e2p(token).c_str(), PIPE_ACCESS_OUTBOUND,
+                           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                           1, 65536, 65536, 0, nullptr);
+    if (p2e == INVALID_HANDLE_VALUE || e2p == INVALID_HANDLE_VALUE) return false;
+    // Core's connectIpc() opens P2E (write) then E2P (read); accept both.
+    if (!ipc_connect_blocking(p2e) || !ipc_connect_blocking(e2p)) return false;
+    return true;
+}
+
+static void ipc_teardown(IpcFd p2e, IpcFd e2p, const std::string& /*token*/) {
+    CloseHandle(p2e);
+    CloseHandle(e2p);
+}
+#else  // POSIX fallback (keeps the CMake target portable for the stub build)
+#  include <sys/socket.h>
+#  include <sys/un.h>
+#  include <unistd.h>
+#  include <cstring>
+static int unix_listen(const char* path) {
+    int srv = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (srv < 0) return -1;
+    struct sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    unlink(path);
+    if (bind(srv, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0 ||
+        listen(srv, 1) < 0) { close(srv); return -1; }
+    return srv;
+}
+static bool ipc_setup(IpcFd& p2e, IpcFd& e2p, const std::string& token) {
+    const std::string sock_p2e = ipc_sock_p2e(token), sock_e2p = ipc_sock_e2p(token);
+    int sp = unix_listen(sock_p2e.c_str()), se = unix_listen(sock_e2p.c_str());
+    if (sp < 0 || se < 0) { if (sp >= 0) close(sp); if (se >= 0) close(se); return false; }
+    p2e = accept(sp, nullptr, nullptr);
+    e2p = accept(se, nullptr, nullptr);
+    close(sp); close(se);
+    return p2e >= 0 && e2p >= 0;
+}
+static void ipc_teardown(IpcFd p2e, IpcFd e2p, const std::string& token) {
+    close(p2e); close(e2p);
+    unlink(ipc_sock_p2e(token).c_str()); unlink(ipc_sock_e2p(token).c_str());
+}
+#endif
+
+// ── Resolution → dimensions (0=360p, 1=720p, 2=1080p) ────────────────────────
+static void res_to_dims(uint32_t res, uint32_t& w, uint32_t& h) {
+    switch (res) {
+    case 0: w = 640;  h = 360;  break;
+    case 2: w = 1920; h = 1080; break;
+    case 1:
+    default: w = 1280; h = 720; break;
+    }
+}
+
+// ── Synthetic meeting state ──────────────────────────────────────────────────
+struct Participant {
+    uint32_t id = 0;
+    std::string name;
+    bool has_video = true;
+    bool muted = false;
+};
+
+struct Target {
+    uint32_t participant_id = 0;
+    uint32_t resolution = 2;
+    std::string source_uuid;
+    ShmRegion shm;
+    ShmRegion iso_shm;
+    uint64_t frame_count = 0;
+    bool is_auto = false;  // created by auto-subscribe vs explicit `subscribe`
+    // Precomputed luma plane. Generating the gradient per pixel per frame costs
+    // ~2M integer divides per 1080p frame, which capped the rig at ~23fps/source
+    // with 10 sources — the PRODUCER, not the core, was the bottleneck, so a
+    // 1080p60 load could not actually be delivered. The real engine memcpys an
+    // already-decoded I420 frame into SHM, so a cached plane + memcpy is both
+    // faster AND a more faithful model of the real write cost.
+    std::vector<uint8_t> luma;
+    uint32_t luma_w = 0, luma_h = 0;
+    bool clapPending = false;  // flash this frame full white (A/V clap)
+    bool clapRestore = false;  // and repaint the picture on the next one
+};
+
+// Z4a (zoom-audio-spec): deterministic TONE emission over the REAL audio ring
+// transport so the full pipeline (ring -> core -> feed -> mix -> monitor) can
+// be soak-tested without a meeting or an operator ear. Each participant gets a
+// distinct frequency (220Hz + pid%8 * 110) - artifacts show as spectral smear,
+// clicks, or autocorr echoes against a mathematically known signal.
+struct AudioToneTarget {
+    uint32_t participant_id = 0;
+    double fixedFreq = 0.0;  // >0 overrides the per-participant frequency
+    ShmRegion shm;
+    uint64_t samplePos = 0;
+    uint64_t packetsWritten = 0;
+    std::chrono::steady_clock::time_point startedAt;
+    bool clapPending = false;      // a clap instant is waiting to be placed
+    int clapSamplesRemaining = 0;  // burst continues across packet boundaries
+};
+
+// ── A/V CLAP: content-level sync measurement without a person or a meeting ───
+// The real clap test needs someone in a live meeting clapping at a camera. This
+// synthesizes the same event: at a known instant the video goes FULL WHITE for
+// exactly one frame and the audio carries a full-scale burst at the SAME instant.
+// Record it, find both events in the file, and the separation IS the pipeline's
+// content-level A/V skew — the number no stream-alignment check can see.
+//
+// The two grids do not line up (audio packets are 10ms, video frames 16.7ms), so
+// the AUDIO burst is placed sample-accurately on the intended instant and the
+// VIDEO flash lands on the first frame boundary at or after it. The engine logs
+// how far that boundary fell so the measurement can subtract the source-side
+// quantisation instead of pretending it is zero.
+//
+// COREVIDEO_FAKE_CLAP_MS=<interval ms> (0/unset = off). Claps repeat so a
+// recording started at an arbitrary moment still captures several.
+static std::chrono::steady_clock::time_point g_clapInstant{};
+static constexpr int kClapBurstSamples = 96;  // 2ms at 48k: survives AAC, still sharp
+
+static std::mutex                 g_mtx;          // guards everything below
+static std::vector<Participant>   g_roster;       // current participants
+static uint32_t                   g_active_speaker = 0;
+static std::map<std::string, AudioToneTarget> g_audioTargets;  // Z4a tone streams
+static std::map<std::string, Target> g_targets;   // by source_uuid
+static bool                       g_joined = false;
+static uint64_t                   g_meeting_generation = 0;
+static uint64_t                   g_roster_revision = 0;
+static std::atomic<bool>          g_running{true};
+static bool                       g_autosubscribe = true;
+static uint32_t                   g_auto_res = 2;
+
+// Baseline roster: numeric ids, has_video=true, names per the mission spec.
+// The first six keep their historical names/ids so the existing validators
+// (validate-record-audio / validate-iso-record) see an unchanged roster; past
+// that the roster is generated so a drill can synthesize a FULL production wall
+// (the product targets 10 x 1080p sources, which is where the render tick's
+// per-source costs actually show up — six was never enough to reproduce it).
+static std::vector<Participant> baseline_roster(int count) {
+    static const std::string kNames[] = {"mv1", "mv2", "Producer", "mv4", "mv5", "mv6"};
+    std::vector<Participant> r;
+    for (int i = 0; i < count; ++i) {
+        const uint32_t id = static_cast<uint32_t>(101 + i);
+        const std::string name = i < 6 ? kNames[i] : ("mv" + std::to_string(i + 1));
+        r.push_back({id, name, true});
+    }
+    return r;
+}
+
+static bool roster_has(uint32_t id) {
+    for (const auto& p : g_roster)
+        if (p.id == id) return true;
+    return false;
+}
+
+// ── ONE video stream per participant ─────────────────────────────────────────
+// The rig auto-subscribes "participant-video-<id>-auto" so a headless validator
+// that never subscribes still sees frames; the app then explicitly subscribes
+// "participant-video-<id>-camera" for the SAME participant. Both are targets, so
+// both produced a frame every tick — and the core keys decoded frames by
+// participant (latestDecodedFrames_[frame.participantId]), so two independent
+// frameId sequences interleaved into one participant slot. Per-participant
+// delivery was therefore 2 x COREVIDEO_FAKE_ENGINE_FPS plus interleave phase
+// noise, which makes every fps number taken with this rig uninterpretable.
+// The real engine delivers one stream per subscribed participant; so does this
+// now — the explicit subscribe RETIRES the auto stand-in.
+static bool has_explicit_target_locked(uint32_t pid) {
+    for (const auto& entry : g_targets)
+        if (!entry.second.is_auto && entry.second.participant_id == pid) return true;
+    return false;
+}
+
+// Drop every AUTO target for `pid`. Only touches is_auto targets, so a
+// participant that never got an explicit subscribe keeps its auto stream.
+static void retire_auto_targets_locked(uint32_t pid) {
+    for (auto it = g_targets.begin(); it != g_targets.end();) {
+        if (it->second.is_auto && it->second.participant_id == pid) {
+            shm_region_destroy(it->second.shm); shm_region_destroy(it->second.iso_shm);
+            diag("auto-retire " + it->first + " (explicit subscribe owns participant " +
+                 std::to_string(pid) + ")");
+            it = g_targets.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// Build + send the {"cmd":"participants",...} event — byte-identical shape to
+// the real engine's EngineParticipants::send_roster().
+static void send_participants_locked() {
+    std::string msg = R"({"cmd":"participants","meeting_generation":)" +
+        std::to_string(g_meeting_generation) + R"(,"roster_revision":)" +
+        std::to_string(++g_roster_revision) + R"(,"active_speaker_id":)" +
+        std::to_string(g_active_speaker) + R"(,"participants":[)";
+    for (size_t i = 0; i < g_roster.size(); ++i) {
+        const auto& p = g_roster[i];
+        if (i) msg += ",";
+        const bool talking = (p.id == g_active_speaker);
+        msg += R"({"id":)" + std::to_string(p.id) +
+               R"(,"name":")" + json_escape(p.name) +
+               R"(","has_video":)" + (p.has_video ? "true" : "false") +
+               R"(,"is_talking":)" + (talking ? "true" : "false") +
+               R"(,"is_muted":)" + (p.muted ? "true" : "false") +
+               R"(,"is_sharing_screen":false})";
+    }
+    msg += "]}";
+    EngineIpc::write(msg);
+}
+
+// Ensure auto-subscribe targets exist for every video-on participant and prune
+// auto targets whose participant has left.
+static void sync_auto_targets_locked() {
+    if (!g_autosubscribe) return;
+    // Add missing.
+    for (const auto& p : g_roster) {
+        if (!p.has_video) continue;
+        // An explicit subscribe already owns this participant's one stream.
+        if (has_explicit_target_locked(p.id)) continue;
+        const std::string uuid = "participant-video-" + std::to_string(p.id) + "-auto";
+        if (g_targets.find(uuid) == g_targets.end()) {
+            Target t;
+            t.participant_id = p.id;
+            t.resolution = g_auto_res;
+            t.source_uuid = uuid;
+            t.is_auto = true;
+            g_targets.emplace(uuid, std::move(t));
+            diag("auto-subscribe " + uuid + " res=" + std::to_string(g_auto_res));
+        }
+    }
+    // Prune auto targets for departed participants — and for any participant an
+    // explicit subscribe has since taken over (belt and braces with the retire
+    // on subscribe: whichever runs first, exactly one stream survives).
+    for (auto it = g_targets.begin(); it != g_targets.end();) {
+        if (it->second.is_auto && (!roster_has(it->second.participant_id) ||
+                                   has_explicit_target_locked(it->second.participant_id))) {
+            shm_region_destroy(it->second.shm); shm_region_destroy(it->second.iso_shm);
+            diag("auto-unsubscribe " + it->first);
+            it = g_targets.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// Fabricate one animated I420 frame for `t` into its SHM, then emit the frame
+// event. Replicates engine-video.cpp's odd/even sequence tearing protocol.
+static void produce_frame_locked(Target& t, uint64_t tick) {
+    uint32_t w = 0, h = 0;
+    res_to_dims(t.resolution, w, h);
+    const size_t y_len = static_cast<size_t>(w) * static_cast<size_t>(h);
+    const size_t total = sizeof(ShmFrameHeader) + y_len + y_len / 4 + y_len / 4;
+
+    if (!t.shm.ptr || t.shm.size < total) {
+        const std::string region_name = EngineIpc::shm_prefix() + t.source_uuid;
+        if (!shm_region_create(t.shm, region_name, total)) {
+            if (t.frame_count == 0)
+                EngineIpc::write(
+                    R"({"cmd":"debug","stage":"video_shm_create_failed","source_uuid":")" +
+                    t.source_uuid + R"(","participant_id":)" +
+                    std::to_string(t.participant_id) + "}");
+            return;
+        }
+    }
+
+    auto* hdr = static_cast<ShmFrameHeader*>(t.shm.ptr);
+    auto* pixels = static_cast<uint8_t*>(t.shm.ptr) + sizeof(ShmFrameHeader);
+    uint8_t* yp = pixels;
+    uint8_t* up = pixels + y_len;
+    uint8_t* vp = pixels + y_len + y_len / 4;
+
+    // Per-participant base luma + chroma so each tile reads as a distinct color,
+    // animated by `tick` so motion / fps is visually observable.
+    const uint32_t pid = t.participant_id;
+    const int base = static_cast<int>(40 + (pid * 37) % 160);
+    const int phase = static_cast<int>(tick * 6);
+    // Build the diagonal gradient ONCE per target, then memcpy it per frame.
+    if (t.luma.size() != y_len || t.luma_w != w || t.luma_h != h) {
+        t.luma.resize(y_len);
+        for (uint32_t y = 0; y < h; ++y) {
+            uint8_t* row = t.luma.data() + static_cast<size_t>(y) * w;
+            const int yterm = static_cast<int>((y * 255) / h);
+            for (uint32_t x = 0; x < w; ++x) {
+                int v = base + ((static_cast<int>((x * 255) / w) + yterm) & 0xFF) / 2;
+                row[x] = static_cast<uint8_t>(v > 255 ? 255 : (v < 0 ? 0 : v));
+            }
+        }
+        t.luma_w = w;
+        t.luma_h = h;
+    }
+    // Paint the full planes ONCE; afterwards only advance a moving band.
+    //
+    // Repainting 3.1MB per frame per source made the PRODUCER the bottleneck
+    // (profiled: _platform_memmove dominant, ceiling ~690MB/s => ~22fps/source
+    // at 8-10 sources), so the rig could not deliver the 1080p60 wall it was
+    // supposed to be testing. That write cost is rig overhead, not product cost:
+    // in the real system the Zoom SDK's own decode thread fills this buffer. The
+    // CORE still snapshots the full 3.1MB every frame, which is the cost under
+    // test — so this changes what the rig can deliver, not what it measures.
+    if (t.frame_count == 0) {
+        std::memcpy(yp, t.luma.data(), y_len);
+        std::memset(up, static_cast<uint8_t>(90 + (pid * 53) % 110), y_len / 4);
+        std::memset(vp, static_cast<uint8_t>(90 + (pid * 97) % 110), y_len / 4);
+    }
+    // Motion stays observable (and every frame's bytes differ) via a moving band.
+    const uint32_t band = static_cast<uint32_t>((phase / 6) % (h ? h : 1));
+    const uint32_t prev = static_cast<uint32_t>((band + h - 1) % (h ? h : 1));
+    std::memcpy(yp + static_cast<size_t>(prev) * w,
+                t.luma.data() + static_cast<size_t>(prev) * w, w);
+    std::memset(yp + static_cast<size_t>(band) * w, 235, w);
+
+    // ...but a ONE-ROW band is not measurable MOTION. Any judge that asks "did
+    // the picture move" reads the frame's MEAN luma, and a band that brightens
+    // one row of h while restoring the row behind it changes that mean by
+    // ~0.0007 - so `live-meeting-soak.mjs`'s motion gate (>0.05 YAVG of
+    // frame-to-frame change, which exists because 8995 frames of FLAT luma once
+    // passed every validator that counted frames) scored 0% of frames moving on
+    // a rig that was in fact delivering 60fps. A harness that cannot satisfy a
+    // gate makes that gate unfalsifiable, which is worse than not having it.
+    // So pulse a BLOCK: h/8 rows stepping 7 luma per frame is ~0.9 YAVG at the
+    // frame level, 18x the threshold, for 1/8 of a full repaint (the cost this
+    // function deliberately avoids - see the comment above). Offset by pid so
+    // the tiles of one wall carry different values while all advancing together.
+    const uint32_t pulseRows = h / 8;
+    if (pulseRows > 0) {
+        const auto pulse = static_cast<uint8_t>(40 + (tick * 7 + pid) % 180);
+        std::memset(yp, pulse, static_cast<size_t>(pulseRows) * w);
+    }
+
+    // A/V clap: one full-white frame. Restored on the very next frame, so the
+    // event is exactly one frame long and unambiguous to find in the recording.
+    if (t.clapRestore) {
+        std::memcpy(yp, t.luma.data(), y_len);
+        t.clapRestore = false;
+    }
+    if (t.clapPending) {
+        std::memset(yp, 235, y_len);
+        t.clapPending = false;
+        t.clapRestore = true;
+        // How far past the intended instant this frame boundary fell. The
+        // measurement subtracts it — the source-side grid mismatch is not skew.
+        const auto lateUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now() - g_clapInstant).count();
+        diag("clap video pid=" + std::to_string(pid) + " frame=" +
+             std::to_string(t.frame_count + 1) + " late_us=" + std::to_string(lateUs));
+    }
+
+    // Opt-in identity fixture for the actual Sources page. The normal moving
+    // gradient and clap fixtures are unchanged unless this QA mode is selected.
+    static const bool primaryColors = [] {
+        const char* value = std::getenv("COREVIDEO_FAKE_PRIMARY_COLORS");
+        return value && value[0] == '1';
+    }();
+    if (primaryColors) {
+        const auto channel = (pid - 101) % 3; // B, G, R; matches the presenter BGRA probe
+        const uint8_t luma[] = {41, 145, 82}, chromaU[] = {240, 54, 90}, chromaV[] = {110, 34, 240};
+        std::memset(yp, static_cast<uint8_t>(luma[channel] + static_cast<int>(tick % 17) - 8), y_len);
+        std::memset(up, chromaU[channel], y_len / 4);
+        std::memset(vp, chromaV[channel], y_len / 4);
+    }
+
+    // Sequence protocol: odd while writing, even when complete (reader rejects odd).
+    uint32_t seq = hdr->sequence + 1;
+    if ((seq & 1u) == 0) ++seq;
+    hdr->sequence = seq;
+    std::atomic_thread_fence(std::memory_order_release);
+    hdr->width = w;
+    hdr->height = h;
+    hdr->y_len = static_cast<uint32_t>(y_len);
+    // (planes already written above)
+    std::atomic_thread_fence(std::memory_order_release);
+    hdr->sequence = seq + 1;
+
+    const auto iso_epoch = IsoVideoDemand::instance().get(t.source_uuid);
+    if (!iso_epoch) {
+        if (t.iso_shm.ptr) shm_region_destroy(t.iso_shm);
+    } else {
+        const auto name = EngineIpc::shm_prefix() + t.source_uuid + "-iso";
+        const bool mapped = t.iso_shm.ptr || shm_region_create(t.iso_shm, name, zoom_iso::bytes);
+        const auto captured = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count() / 100;
+        if (!mapped || !zoom_iso::write(t.iso_shm.ptr, t.iso_shm.size, iso_epoch, seq + 1,
+                w, h, yp, up, vp, captured))
+            EngineIpc::write("{\"cmd\":\"error\",\"stage\":\"iso_video\",\"reason\":\"arrival_ring_write_failed\"}");
+    }
+
+    ++t.frame_count;
+    if (t.frame_count == 1 || t.frame_count % 120 == 0) {
+        EngineIpc::write(
+            R"({"cmd":"debug","stage":"video_frame_received","source_uuid":")" +
+            t.source_uuid + R"(","participant_id":)" +
+            std::to_string(t.participant_id) + R"(,"count":)" +
+            std::to_string(t.frame_count) + R"(,"w":)" + std::to_string(w) +
+            R"(,"h":)" + std::to_string(h) + "}");
+    }
+
+    // Video-beacon fix: discovery/liveness beacon only (core polls frames).
+    if (t.frame_count == 1 || t.frame_count % 30 == 0) {
+        EngineIpc::write(
+            R"({"cmd":"frame","source_uuid":")" + t.source_uuid +
+            R"(","participant_id":)" + std::to_string(t.participant_id) +
+            R"(,"w":)" + std::to_string(w) + R"(,"h":)" + std::to_string(h) + "}");
+    }
+}
+
+// Z4a: emit all 10ms tone packets due for a target through the SHARED ring
+// layout (engine-ipc.h) - the same writer protocol as the real engine.
+static void produce_audio_locked(const std::string& uuid, AudioToneTarget& target) {
+    if (!target.shm.ptr) {
+        const std::string region_name = EngineIpc::shm_prefix() + uuid + "_audio";
+        if (!shm_region_create(target.shm, region_name, audio_ring_region_size())) return;
+        auto* hdr = static_cast<ShmAudioRingHeader*>(target.shm.ptr);
+        hdr->slot_count = kAudioRingSlots;
+        hdr->slot_payload = kAudioRingSlotPayload;
+        hdr->write_counter = 0;
+        std::atomic_thread_fence(std::memory_order_release);
+        hdr->magic = kAudioRingMagic;
+        target.startedAt = std::chrono::steady_clock::now();
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - target.startedAt).count();
+    auto due = static_cast<uint64_t>(elapsedMs / 10);
+    // After a producer stall, SPREAD the backlog (at most 8 packets per pass)
+    // instead of bursting or SKIPPING - a skip jumps the tone phase and writes
+    // a click INTO the packets (soak run 8: 1400 entrance clicks at packet
+    // seams, all from this). The 128-slot ring absorbs 8-packet passes; the
+    // synthetic timeline simply lags briefly and catches up phase-perfect.
+    if (due > target.packetsWritten + 8) {
+        due = target.packetsWritten + 8;
+    }
+    const double freq = target.fixedFreq > 0.0 ? target.fixedFreq
+                                               : 220.0 + static_cast<double>(target.participant_id % 8u) * 110.0;
+    while (target.packetsWritten < due) {
+        auto* hdr = static_cast<ShmAudioRingHeader*>(target.shm.ptr);
+        const uint32_t w = hdr->write_counter;
+        auto* slotBase = static_cast<char*>(target.shm.ptr) + sizeof(ShmAudioRingHeader) +
+                         static_cast<size_t>(w % kAudioRingSlots) * audio_ring_slot_stride();
+        auto* slot = reinterpret_cast<ShmAudioRingSlot*>(slotBase);
+        slot->seq = 2u * w + 1u;
+        std::atomic_thread_fence(std::memory_order_release);
+        slot->sample_rate = 48000;
+        slot->channels = 1;
+        slot->reserved = 0;
+        slot->byte_len = 480 * sizeof(int16_t);
+        auto* pcm = reinterpret_cast<int16_t*>(slotBase + sizeof(ShmAudioRingSlot));
+        for (int i = 0; i < 480; ++i) {
+            const double phase = 2.0 * 3.14159265358979323846 * freq *
+                                 static_cast<double>(target.samplePos + static_cast<uint64_t>(i)) / 48000.0;
+            pcm[i] = static_cast<int16_t>(std::lround(std::sin(phase) * 0.25 * 32767.0));
+        }
+
+        // A/V clap: place the burst SAMPLE-ACCURATELY on the intended instant.
+        // This packet covers [packetStart, packetStart+10ms) on the target's own
+        // timeline, so the clap's offset inside it is exact even though packets
+        // are only written when due.
+        const auto packetStart =
+            target.startedAt + std::chrono::milliseconds(10 * static_cast<long long>(target.packetsWritten));
+        if (target.clapPending) {
+            const auto intoPacketUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                          g_clapInstant - packetStart).count();
+            if (intoPacketUs < 0) {
+                target.clapPending = false;  // already past: never fire a clap late
+            } else if (intoPacketUs < 10000) {
+                const int startSample = static_cast<int>(intoPacketUs * 48 / 1000);
+                target.clapPending = false;
+                target.clapSamplesRemaining = kClapBurstSamples;
+                diag("clap audio pid=" + std::to_string(target.participant_id) +
+                     " packet=" + std::to_string(target.packetsWritten) +
+                     " sample=" + std::to_string(startSample));
+                for (int i = startSample; i < 480 && target.clapSamplesRemaining > 0; ++i) {
+                    pcm[i] = (i & 1) ? 32000 : -32000;  // full-scale, unmistakable
+                    --target.clapSamplesRemaining;
+                }
+            }
+        } else if (target.clapSamplesRemaining > 0) {
+            // Burst straddled the packet boundary — finish it here so the event
+            // keeps its full width regardless of where in the packet it landed.
+            for (int i = 0; i < 480 && target.clapSamplesRemaining > 0; ++i) {
+                pcm[i] = (i & 1) ? 32000 : -32000;
+                --target.clapSamplesRemaining;
+            }
+        }
+        target.samplePos += 480;
+        std::atomic_thread_fence(std::memory_order_release);
+        slot->seq = 2u * w + 2u;
+        std::atomic_thread_fence(std::memory_order_release);
+        hdr->write_counter = w + 1u;
+        ++target.packetsWritten;
+        // Discovery beacon only (Z2b): the core drains on its poll.
+        if (target.packetsWritten == 1 || target.packetsWritten % 100 == 0) {
+            EngineIpc::write(std::string("{\"cmd\":\"audio\",\"source_uuid\":\"") + uuid +
+                             "\",\"participant_id\":" + std::to_string(target.participant_id) +
+                             ",\"byte_len\":960}");
+        }
+    }
+}
+
+// ── Producer thread: frame fabrication for all active targets ────────────────
+// Cadence is COREVIDEO_FAKE_ENGINE_FPS (default 30, back-compat with the audio
+// and ISO validators). Zoom delivers up to 1080p60, and the product's north star
+// is 8 Zoom + 2 capture @1080p60 — a 30fps rig only exercises HALF the real
+// per-frame ingest/upload rate, so perf drills must be able to ask for 60.
+static void producer_loop() {
+    using clock = std::chrono::steady_clock;
+    int fps = 30;
+    if (const char* f = std::getenv("COREVIDEO_FAKE_ENGINE_FPS")) {
+        try { fps = std::stoi(f); } catch (...) {}
+        if (fps < 1) fps = 1;
+        if (fps > 120) fps = 120;
+    }
+    const auto frameInterval = std::chrono::microseconds(1000000 / fps);
+    diag("producer fps=" + std::to_string(fps));
+    int clapIntervalMs = 0;
+    if (const char* c = std::getenv("COREVIDEO_FAKE_CLAP_MS")) {
+        try { clapIntervalMs = std::stoi(c); } catch (...) {}
+        if (clapIntervalMs < 0) clapIntervalMs = 0;
+    }
+    const uint64_t clapEveryTicks =
+        clapIntervalMs > 0
+            ? (std::max)(static_cast<uint64_t>(1),
+                         static_cast<uint64_t>(fps) * static_cast<uint64_t>(clapIntervalMs) / 1000u)
+            : 0;
+    const auto gapTicksFromMs = [fps](const char* name) -> uint64_t {
+        const char* raw = std::getenv(name);
+        if (!raw) return 0;
+        try {
+            const int ms = std::stoi(raw);
+            return ms > 0 ? static_cast<uint64_t>(fps) * static_cast<uint64_t>(ms) / 1000u : 0;
+        } catch (...) { return 0; }
+    };
+    const uint64_t videoGapStartTick = gapTicksFromMs("COREVIDEO_FAKE_VIDEO_GAP_START_MS");
+    const uint64_t videoGapDurationTicks = gapTicksFromMs("COREVIDEO_FAKE_VIDEO_GAP_DURATION_MS");
+    if (videoGapStartTick > 0 && videoGapDurationTicks > 0)
+        diag("video gap start_ms=" + std::to_string(videoGapStartTick * 1000u / fps) +
+             " duration_ms=" + std::to_string(videoGapDurationTicks * 1000u / fps));
+    if (clapEveryTicks > 0)
+        diag("clap interval_ms=" + std::to_string(clapIntervalMs) +
+             " every_ticks=" + std::to_string(clapEveryTicks));
+    auto next = clock::now();
+    uint64_t tick = 0;
+    size_t targetCount = 0;       // live video targets, sampled under the lock
+    size_t participantCount = 0;  // DISTINCT participants those targets cover
+    while (g_running.load(std::memory_order_acquire)) {
+        next += frameInterval;
+        {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            if (g_joined) {
+                ++tick;
+                // A/V clap: arm video and audio from ONE instant so the two are
+                // genuinely the same event. Armed ON A FRAME BOUNDARY (not a
+                // wall-clock schedule) so the flash needs no timing correction:
+                // the audio burst is then placed sample-accurately on the very
+                // instant this frame is painted. Repeats, so a recording started
+                // at an arbitrary moment still captures several.
+                if (clapEveryTicks > 0 && tick % clapEveryTicks == 0) {
+                    g_clapInstant = clock::now();
+                    for (auto& [uuid, t] : g_targets) t.clapPending = true;
+                    for (auto& [uuid, a] : g_audioTargets) a.clapPending = true;
+                }
+                // COREVIDEO_FAKE_NO_VIDEO=1: audio-only mode for the audio soak
+                // (4x video synthesis saturated the box: worker 43.6/50 ticks/s
+                // -> feed-cap drops at exactly the deficit rate, soak run 17).
+                static const bool s_noVideo = [] {
+                    const char* env = std::getenv("COREVIDEO_FAKE_NO_VIDEO");
+                    return env != nullptr && env[0] == 0x31;
+                }();
+                const bool videoGap = videoGapDurationTicks > 0 &&
+                    tick >= videoGapStartTick && tick < videoGapStartTick + videoGapDurationTicks;
+                if (videoGap) {
+                    // A transient created during the missing source frames must
+                    // not reappear as a stale flash when the feed resumes.
+                    for (auto& [uuid, t] : g_targets) t.clapPending = false;
+                }
+                if (!s_noVideo && !videoGap) {
+                    for (auto& [uuid, t] : g_targets) {
+                        if (roster_has(t.participant_id))
+                            produce_frame_locked(t, tick);
+                    }
+                }
+                // Z4a: tone packets for every SUBSCRIBED audio target - the app
+                // decides which streams exist (ISO per participant + the mixed
+                // stream keyed at synthetic id 0). A second hardcoded mix
+                // stream here interleaved TWO tones into the core zoom-mix
+                // buffer = packet-boundary phase chaos (run 11).
+                for (auto& [auuid, atarget] : g_audioTargets) {
+                    if (atarget.fixedFreq > 0.0 || roster_has(atarget.participant_id))
+                        produce_audio_locked(auuid, atarget);
+                }
+                // Sampled here (under g_mtx) for the achieved-rate diagnostic
+                // below, which must never read g_targets unlocked.
+                std::set<uint32_t> pids;
+                targetCount = 0;
+                for (const auto& entry : g_targets) {
+                    if (!roster_has(entry.second.participant_id)) continue;
+                    ++targetCount;
+                    pids.insert(entry.second.participant_id);
+                }
+                participantCount = pids.size();
+            }
+        }
+        std::this_thread::sleep_until(next);
+        // Achieved cadence: a rig that silently under-delivers invalidates every
+        // perf number taken with it, so report what it ACTUALLY produced.
+        static auto s_rateStamp = clock::now();
+        static uint64_t s_rateTick = 0;
+        if (++s_rateTick >= 120) {
+            const double sec = std::chrono::duration<double>(clock::now() - s_rateStamp).count();
+            const double ticksPerSec = sec > 0 ? 120.0 / sec : 0.0;
+            // A "ticks/s across N targets" line is technically true and actively
+            // misleading: it was read as a per-participant rate while N targets
+            // covered fewer participants, so the real per-participant delivery
+            // was a multiple of it. State the participant count and the
+            // per-participant rate so the number cannot be misread again.
+            const double streamsPerParticipant =
+                participantCount > 0 ? static_cast<double>(targetCount) /
+                                           static_cast<double>(participantCount)
+                                     : 0.0;
+            diag("producer achieved " + std::to_string(ticksPerSec) +
+                 " ticks/s per target across " + std::to_string(targetCount) +
+                 " video targets covering " + std::to_string(participantCount) +
+                 " participants (" + std::to_string(streamsPerParticipant) +
+                 " stream/participant) => per-participant delivery " +
+                 std::to_string(ticksPerSec * streamsPerParticipant) +
+                 " fps (configured source fps=" + std::to_string(fps) + ")" +
+                 (streamsPerParticipant > 1.0001
+                      ? "  WARNING: >1 stream per participant, per-participant fps is NOT the source rate"
+                      : ""));
+            s_rateStamp = clock::now();
+            s_rateTick = 0;
+        }
+        // If we fell badly behind (debugger pause etc.), resync the cadence.
+        if (clock::now() - next > std::chrono::milliseconds(200)) next = clock::now();
+    }
+}
+
+// ── Churn thread: active-speaker rotation + roster oscillation ────────────────
+static void churn_loop() {
+    // Z4b soak mode: a deterministic AUDIO soak needs stable streams - roster
+    // churn (a simulation feature for multiview tile testing) ends ISO tone
+    // streams mid-capture. COREVIDEO_FAKE_NO_CHURN=1 freezes the roster AND
+    // the active-speaker rotation.
+    if (const char* noChurn = std::getenv("COREVIDEO_FAKE_NO_CHURN"); noChurn && noChurn[0] == 0x31) {
+        return;
+    }
+    using clock = std::chrono::steady_clock;
+    int half_seconds = 0;
+    bool fourth_present = false;  // is "mv4" currently in the meeting?
+    while (g_running.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (!g_running.load(std::memory_order_acquire)) break;
+
+        bool joined;
+        { std::lock_guard<std::mutex> lk(g_mtx); joined = g_joined; }
+        if (!joined) continue;
+
+        ++half_seconds;
+
+        // Optional #659 replay: one source toggles Zoom mute without a scene
+        // action. The fixed 10s leave/rejoin below exercises SDK id reuse.
+        if (std::getenv("COREVIDEO_FAKE_ROSTER_TRANSITIONS") && half_seconds % 8 == 0) {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            if (!g_roster.empty()) {
+                g_roster.front().muted = !g_roster.front().muted;
+                send_participants_locked();
+            }
+        }
+
+        // Every ~2s: rotate the active speaker among the current roster.
+        if (half_seconds % 4 == 0) {
+            std::string speaker_msg;
+            {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                if (!g_roster.empty()) {
+                    // advance to the next participant after the current speaker
+                    size_t idx = 0;
+                    for (size_t i = 0; i < g_roster.size(); ++i)
+                        if (g_roster[i].id == g_active_speaker) { idx = i; break; }
+                    idx = (idx + 1) % g_roster.size();
+                    g_active_speaker = g_roster[idx].id;
+                    speaker_msg = R"({"cmd":"active_speaker","participant_id":)" +
+                                  std::to_string(g_active_speaker) + "}";
+                }
+            }
+            if (!speaker_msg.empty()) {
+                EngineIpc::write(speaker_msg);
+                // Refresh roster so is_talking flags follow the active speaker.
+                std::lock_guard<std::mutex> lk(g_mtx);
+                send_participants_locked();
+            }
+            diag("active_speaker -> " + std::to_string(g_active_speaker));
+        }
+
+        // Every ~10s: oscillate the roster 3 <-> 4 (mv4 leaves / re-joins). This
+        // drives multiview tile add/remove churn — the fail-fast trigger.
+        if (half_seconds % 20 == 0) {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            const Participant mv4{104, "mv4", true};
+            if (fourth_present) {
+                // Leave: drop mv4 from the roster.
+                for (auto it = g_roster.begin(); it != g_roster.end(); ++it)
+                    if (it->id == mv4.id) { g_roster.erase(it); break; }
+                if (g_active_speaker == mv4.id && !g_roster.empty())
+                    g_active_speaker = g_roster.front().id;
+                fourth_present = false;
+                // NOTE: do NOT emit {"cmd":"left"} here. In the real engine
+                // protocol `left` means the LOCAL user left the whole meeting —
+                // the core's ZoomEngineState maps it to reset() (meetingState ->
+                // idle, roster cleared), which flips the WinUI to "Zoom Offline /
+                // Video in room (0)" and tears down the meeting ~20s after join.
+                // A REMOTE participant leaving is conveyed purely by the updated
+                // {"cmd":"participants"} roster sent below — that drives the
+                // multiview tile add/remove churn while staying in-meeting.
+                diag("roster -> 3 (mv4 left)");
+            } else {
+                // Re-join: add mv4 back.
+                if (!roster_has(mv4.id)) g_roster.push_back(mv4);
+                fourth_present = true;
+                diag("roster -> 4 (mv4 joined)");
+            }
+            sync_auto_targets_locked();
+            send_participants_locked();
+        }
+    }
+}
+
+// ── Heartbeat thread: {"cmd":"ping"} every ~2s (mirrors the real engine) ──────
+static void heartbeat_loop() {
+    while (g_running.load(std::memory_order_acquire)) {
+        for (int i = 0; i < 20 && g_running.load(std::memory_order_acquire); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!g_running.load(std::memory_order_acquire)) break;
+        if (!EngineIpc::write(R"({"cmd":"ping"})")) break;
+    }
+}
+
+int main(int argc, char** argv) {
+    // Per-instance IPC token from the parent — must match the pipe/socket/SHM
+    // names the core's ZoomEngineProcessClient expects (see engine main.cpp).
+    const std::string ipc_token = ipc_token_from_args(argc, argv);
+    EngineIpc::set_shm_prefix(ipc_token);
+    // Env configuration.
+    if (const char* a = std::getenv("COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE"))
+        g_autosubscribe = !(a[0] == '0');
+    if (const char* r = std::getenv("COREVIDEO_FAKE_ENGINE_RES")) {
+        try { g_auto_res = static_cast<uint32_t>(std::stoul(r)); } catch (...) {}
+        if (g_auto_res > 2) g_auto_res = 2;
+    }
+    int baseline = 3;
+    if (const char* p = std::getenv("COREVIDEO_FAKE_ENGINE_PARTICIPANTS")) {
+        try { baseline = std::stoi(p); } catch (...) {}
+        if (baseline < 1) baseline = 1;
+        // 16 covers the 10-source production wall plus headroom.
+        if (baseline > 16) baseline = 16;
+    }
+    diag("fake-engine start autosubscribe=" + std::to_string(g_autosubscribe) +
+         " auto_res=" + std::to_string(g_auto_res) +
+         " baseline=" + std::to_string(baseline));
+
+    IpcFd p2e = kIpcInvalidFd, e2p = kIpcInvalidFd;
+    if (!ipc_setup(p2e, e2p, ipc_token)) {
+        diag("ipc_setup failed");
+        return 1;
+    }
+    EngineIpc::init(e2p);
+    EngineIpc::write(R"({"cmd":"ready"})");
+    diag("ready");
+
+    std::thread producer(producer_loop);
+    std::thread churn(churn_loop);
+    std::thread heartbeat(heartbeat_loop);
+
+    std::string line;
+    while (g_running.load(std::memory_order_acquire)) {
+        if (!ipc_read_line(p2e, line)) break;  // EOF / pipe closed
+        if (line.empty()) continue;
+        diag("recv: " + line);
+
+        if (line.find(IPC_CMD_QUIT) != std::string::npos) {
+            g_running.store(false, std::memory_order_release);
+
+        } else if (line.find(IPC_CMD_INIT) != std::string::npos) {
+            EngineIpc::write(R"({"cmd":"debug","stage":"init_received"})");
+            if (const char* delay = std::getenv("COREVIDEO_FAKE_AUTH_DELAY_MS")) {
+                const int ms = (std::max)(0, (std::min)(60000, std::atoi(delay)));
+                diag("synthetic-auth-delay=" + std::to_string(ms));
+                std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            }
+            EngineIpc::write(R"({"cmd":"auth_ok"})");
+
+        } else if (line.find(IPC_CMD_JOIN) != std::string::npos) {
+            std::string meeting_id = json_str(line, "meeting_id");
+            EngineIpc::write(
+                R"({"cmd":"debug","stage":"join_received","meeting_id":")" +
+                json_escape(meeting_id) + "\"}");
+            if (const char* delay = std::getenv("COREVIDEO_FAKE_JOIN_DELAY_MS")) {
+                const int ms = (std::max)(0, (std::min)(60000, std::atoi(delay)));
+                diag("synthetic-join-delay=" + std::to_string(ms));
+                std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_roster = baseline_roster(baseline);
+                ++g_meeting_generation;
+                g_roster_revision = 0;
+                g_active_speaker = g_roster.empty() ? 0 : g_roster.front().id;
+                g_joined = true;
+                sync_auto_targets_locked();
+            }
+            EngineIpc::write(R"({"cmd":"joined"})");
+            { std::lock_guard<std::mutex> lk(g_mtx); send_participants_locked(); }
+
+        } else if (line.find(IPC_CMD_LEAVE) != std::string::npos) {
+            {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_joined = false;
+                g_roster.clear();
+                g_active_speaker = 0;
+                for (auto& [uuid, t] : g_targets) { shm_region_destroy(t.shm); shm_region_destroy(t.iso_shm); }
+                g_targets.clear();
+                for (auto& [auuid, atarget] : g_audioTargets) shm_region_destroy(atarget.shm);
+                g_audioTargets.clear();
+            }
+            EngineIpc::write(R"({"cmd":"left"})");
+
+        } else if (line.find(IPC_CMD_START_MEDIA) != std::string::npos) {
+            EngineIpc::write(R"({"cmd":"debug","stage":"raw_media_ready","reason":"fake"})");
+            EngineIpc::write(R"({"cmd":"raw_media_status","active":true,"reason":"fake"})");
+
+        } else if (line.find(IPC_CMD_STOP_MEDIA) != std::string::npos) {
+            EngineIpc::write(R"({"cmd":"debug","stage":"raw_media_stopped","reason":"fake"})");
+            EngineIpc::write(R"({"cmd":"raw_media_status","active":false,"reason":"fake"})");
+
+        } else if (ipc_command_is(line, IPC_CMD_SUBSCRIBE_AUDIO)) {
+            // Z4a: start a deterministic tone stream over the real ring transport.
+            std::string uuid = json_str(line, "source_uuid");
+            {
+                const uint32_t pid = json_uint(line, "participant_id");
+                const bool isMix = uuid.rfind("meeting-audio-", 0) == 0;
+                // Mix is keyed at synthetic id 0 (#465); isolate still needs a
+                // real Zoom user id.
+                if (!uuid.empty() && (pid != 0 || isMix)) {
+                    std::lock_guard<std::mutex> lk(g_mtx);
+                    auto& target = g_audioTargets[uuid];
+                    target.participant_id = pid;
+                    // The meeting mix has its own audio-only target: fixed
+                    // 330Hz keeps program-vs-ISO routing measurable in tests.
+                    if (isMix)
+                        target.fixedFreq = 330.0;
+                }
+            }
+            EngineIpc::write(
+                R"({"cmd":"debug","stage":"audio_subscribe","source_uuid":")" +
+                json_escape(uuid) + "\"}");
+
+        } else if (ipc_command_is(line, IPC_CMD_SUBSCRIBE)) {
+            std::string uuid = json_str(line, "source_uuid");
+            uint32_t pid = json_uint(line, "participant_id");
+            uint32_t res = json_uint(line, "resolution");
+            if (res > 2) res = 1;
+            const std::string mode = json_str(line, "mode");
+            if (!uuid.empty() && pid != 0) {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                auto it = g_targets.find(uuid);
+                if (it == g_targets.end()) {
+                    Target t;
+                    t.participant_id = pid;
+                    t.resolution = res;
+                    t.source_uuid = uuid;
+                    t.is_auto = false;
+                    g_targets.emplace(uuid, std::move(t));
+                } else {
+                    // Re-subscribe: honor an upgraded resolution.
+                    it->second.participant_id = pid;
+                    if (res > it->second.resolution) it->second.resolution = res;
+                    it->second.is_auto = false;
+                }
+                // This participant now has an explicitly-subscribed stream, so
+                // the auto stand-in must go: two live targets for one
+                // participant is two frameId sequences in one core slot.
+                retire_auto_targets_locked(pid);
+            }
+            EngineIpc::write(
+                R"({"cmd":"debug","stage":"video_source_bound","source_uuid":")" +
+                json_escape(uuid) + R"(","participant_id":)" + std::to_string(pid) +
+                R"(,"requested":)" + std::to_string(res) +
+                R"(,"mode":")" + json_escape(mode) + "\"}");
+
+        } else if (ipc_command_is(line, "iso_video")) {
+            const auto uuid = json_str(line, "source_uuid");
+            if (!IsoVideoDemand::instance().set(uuid, json_uint(line, "epoch")))
+                EngineIpc::write("{\"cmd\":\"error\",\"stage\":\"iso_video\",\"reason\":\"arrival_ring_capacity\"}");
+        } else if (ipc_command_is(line, IPC_CMD_UNSUBSCRIBE)) {
+            std::string uuid = json_str(line, "source_uuid");
+            std::lock_guard<std::mutex> lk(g_mtx);
+            auto it = g_targets.find(uuid);
+            if (it != g_targets.end()) {
+                shm_region_destroy(it->second.shm); shm_region_destroy(it->second.iso_shm);
+                g_targets.erase(it);
+            }
+            auto audioIt = g_audioTargets.find(uuid);
+            if (audioIt != g_audioTargets.end()) {
+                shm_region_destroy(audioIt->second.shm);
+                g_audioTargets.erase(audioIt);
+            }
+            // Dropping the explicit stream hands the participant back to
+            // auto-subscribe, so a headless validator that unsubscribes does not
+            // go dark. Still exactly one stream per participant.
+            sync_auto_targets_locked();
+        }
+    }
+
+    g_running.store(false, std::memory_order_release);
+    if (producer.joinable()) producer.join();
+    if (churn.joinable()) churn.join();
+    if (heartbeat.joinable()) heartbeat.join();
+
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        for (auto& [uuid, t] : g_targets) { shm_region_destroy(t.shm); shm_region_destroy(t.iso_shm); }
+        g_targets.clear();
+    }
+    ipc_teardown(p2e, e2p, ipc_token);
+    diag("exit");
+    return 0;
+}
