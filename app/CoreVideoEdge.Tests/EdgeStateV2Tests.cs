@@ -70,6 +70,40 @@ public sealed class EdgeStateV2Tests
     }
 
     [Fact]
+    public void FeedsParse()
+    {
+        var state = EdgeState.Parse("""
+            {"type":"state","feeds":{"mode":"srt","srtHost":"10.0.0.5","srtBasePort":10000,"srtLatencyMs":120,"srtEncrypted":true,
+              "slots":[{"slot":1,"target":"srt://10.0.0.5:10000?passphrase=***","state":"sending","framesSent":900,"framesSkipped":2,
+                        "audioSeconds":30.1,"connected":true},
+                       {"slot":3,"target":"srt://10.0.0.5:10002","state":"failed","framesSent":0,"framesSkipped":0,
+                        "error":"Pro is not listening at 10.0.0.5:10002 (turn on SRT input 3 in CoreVideo Pro). Retrying."}]}}
+            """);
+        var f = state.Feeds!;
+        Assert.Equal("srt", f.Mode);
+        Assert.Equal("10.0.0.5", f.SrtHost);
+        Assert.Equal(10000, f.SrtBasePort);
+        Assert.Equal(120, f.SrtLatencyMs);
+        Assert.True(f.SrtEncrypted);
+        Assert.Equal(2, f.Slots.Count);
+        Assert.True(f.Slots[0].Connected);
+        Assert.Null(f.Slots[0].Receivers);         // SRT: no receiver count
+        Assert.Equal(30.1, f.Slots[0].AudioSeconds);
+        Assert.Equal("failed", f.Slots[1].State);
+        Assert.Null(f.Slots[1].Connected);
+        Assert.StartsWith("Pro is not listening", f.Slots[1].Error);
+    }
+
+    [Fact]
+    public void FeedsAbsentIsNull()
+    {
+        Assert.Null(EdgeState.Parse("""{"type":"state","phase":"idle"}""").Feeds);
+        var ndi = EdgeState.Parse("""{"type":"state","feeds":{"mode":"ndi","slots":[{"slot":2,"target":"CoreVideo Edge X S2","state":"sending","framesSent":5,"framesSkipped":0,"receivers":1}]}}""").Feeds!;
+        Assert.Equal(1, ndi.Slots[0].Receivers);
+        Assert.Null(ndi.SrtEncrypted);
+    }
+
+    [Fact]
     public void EngineOffIsFalseNotNull()
     {
         Assert.False(EdgeState.Parse("""{"type":"state","phase":"idle","engineOn":false}""").EngineOn);

@@ -51,6 +51,27 @@ public sealed record EdgeIsoStream(
 
 public sealed record EdgeRecordFormat(int Width, int Height, int Fps);
 
+// Live feeds to CoreVideo Pro (docs/PROTOCOL.md "Feeds state"). The SRT
+// passphrase is write-only: the state only says whether one is set.
+public sealed record EdgeFeedSlot(
+    int Slot,
+    string Target,          // NDI source name, or the SRT URL with the passphrase redacted
+    string State,           // starting | waiting | sending | failed
+    long FramesSent,
+    long FramesSkipped,
+    double? AudioSeconds,
+    int? Receivers,         // NDI: connected receivers, measured by the sender
+    bool? Connected,        // SRT: Pro's listener reached
+    string? Error);
+
+public sealed record EdgeFeeds(
+    string Mode,            // off | ndi | srt
+    string? SrtHost,
+    int? SrtBasePort,
+    int? SrtLatencyMs,
+    bool? SrtEncrypted,
+    IReadOnlyList<EdgeFeedSlot> Slots);
+
 public sealed record EdgeState
 {
     public long Seq { get; init; }
@@ -75,6 +96,7 @@ public sealed record EdgeState
     public bool MovingRooms { get; init; }               // v2
     public EdgeRecordFormat? RecordFormat { get; init; } // v2
     public string? PreviewDir { get; init; }             // v2
+    public EdgeFeeds? Feeds { get; init; }               // absent from nodes without feeds
     public IReadOnlyList<EdgeParticipant>? Participants { get; init; }  // null: roster not known
     public IReadOnlyList<EdgeSubscription> Subscriptions { get; init; } = [];
     public bool Recording { get; init; }
@@ -175,6 +197,18 @@ public sealed record EdgeState
             format = new EdgeRecordFormat((int)(LN(fmt, "width") ?? fh * 16 / 9), (int)fh, (int)(LN(fmt, "fps") ?? 0));
         }
 
+        EdgeFeeds? feeds = null;
+        if (root.TryGetProperty("feeds", out var fd) && fd.ValueKind == JsonValueKind.Object)
+        {
+            var slots = fd.TryGetProperty("slots", out var fs) && fs.ValueKind == JsonValueKind.Array
+                ? fs.EnumerateArray().Select(x => new EdgeFeedSlot(
+                    (int)L(x, "slot"), S(x, "target"), S(x, "state"), L(x, "framesSent"), L(x, "framesSkipped"),
+                    DN(x, "audioSeconds"), (int?)LN(x, "receivers"), BN(x, "connected"), SN(x, "error"))).ToList()
+                : new List<EdgeFeedSlot>();
+            feeds = new EdgeFeeds(S(fd, "mode", "off"), SN(fd, "srtHost"), (int?)LN(fd, "srtBasePort"),
+                (int?)LN(fd, "srtLatencyMs"), BN(fd, "srtEncrypted"), slots);
+        }
+
         return new EdgeState
         {
             Seq = L(root, "seq"),
@@ -199,6 +233,7 @@ public sealed record EdgeState
             MovingRooms = B(root, "movingRooms"),
             RecordFormat = format,
             PreviewDir = SN(root, "previewDir"),
+            Feeds = feeds,
             Participants = participants,
             Subscriptions = subscriptions,
             Recording = recording,
