@@ -3,13 +3,17 @@
 Product and commands: `README.md`. Control API: `docs/PROTOCOL.md`. Update this
 file in the same change as any substantive work.
 
-## Scope (owner correction, 2026-11-08)
+## Scope
 
-Edge v1 is exactly: Zoom sign-in + join, Sources (subscribe a subset), ISO
-record. Do **not** add a live relay, NDI/SRT/TCP sender, compositor, scenes,
-graphics, program output, streaming, virtual camera, or Pro-side ingest. Never
-downgrade resolution to fit more people on one node: the point of a second
-machine is another full-quality budget.
+- 2026-11-08 (v1): Zoom sign-in + join, Sources (subscribe a subset), ISO record.
+- 2026-11-09 (owner, v2): routing (Subscribe + ISO, cap 8), Monitor with live
+  previews, Engine On, breakout-room survival, record format (1080p/720p,
+  source/30/60), live **feeds to Pro over NDI and SRT** (per routed slot), a
+  logo + Pro/Volt-family design, Windows first and designed for macOS.
+  Specs: `docs/superpowers/specs/2026-11-09-*`.
+- Still out: compositor, scenes, graphics, program output, streaming, virtual
+  camera. Never downgrade resolution automatically to fit more people on one
+  node (720p is only ever an explicit record choice).
 
 ## Processes
 
@@ -17,9 +21,42 @@ machine is another full-quality budget.
   routing, monitor, record, feeds to Pro. Owns no media: spawns the node, speaks
   its JSON-line API and reads the node's preview files read-only.
 - `corevideo-edge.exe` (C++, `native/src/edge/`): the node. Supervises the
-  engine, enforces the subscription cap, records ISOs (Media Foundation).
+  engine, enforces the subscription cap, records ISOs (Media Foundation),
+  publishes Monitor previews (`PreviewPublisher`) and feeds to Pro
+  (`FeedSender`: NDI via the runtime loaded at run time, SRT via an FFmpeg
+  child per slot).
+- `corevideo-edge-ndi-probe.exe`: receives a named NDI source like Pro's NDI
+  input does; used by the validator.
 - `corevideo-zoom-engine.exe` / `-fake.exe` (`native/zoom-engine/`): Pro's
   engine, vendored. I420 + audio rings in shared memory.
+
+## Laws learned 2026-11-09 (v2 day)
+
+- **Breakout moves are `left` + `joined`.** The SDK first reports
+  `meeting_status` 14/15 (or 5, reconnecting); `EngineSupervisor` surfaces the
+  number. Keep engine, slots and take across the move; re-arm on `joined`;
+  the 90 s arrival timeout keys on `awaitingArrival_`, never on a display
+  string; reset the flags on every exit path.
+- **The engine forgets every subscription when raw media stops** (Engine Off,
+  room move, lost grant). Re-send all routed subscriptions + ISO arms on each
+  inactive -> active `raw_media_status` edge. A guest back with the SAME Zoom
+  id must be re-marked present (was a latent bug).
+- **Silent guests have no audio ring at all.** The engine creates it on the
+  first packet. Anything that must carry audio (ISO, feeds) fills silence in
+  real time independent of the ring existing (live: NDI feeds had no audio).
+- **Preview fps comes from the engine's frame sequence** (+2 per frame), not
+  from how often the 15 Hz publisher sampled.
+- **The fake sizes video regions to the frame; the real engine to a fixed
+  1080p capacity.** Readers try both.
+- **Concurrent child processes + inheritable handles = cross-slot leaks.** Pass
+  only the child's handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), create pipes
+  non-inheritable, serialize launches.
+- **FFmpeg echoes the full SRT URL (passphrase included).** Never copy its
+  lines into state or logs; publish the redacted URL only.
+- **Tooling trap:** in this environment the Bash tool collapses `\\n` inside
+  heredocs (python/JS strings and regexes came out with real newlines). Put
+  scripted edits with backslashes in a file written by the Write tool, or use
+  Edit.
 
 ## Lifted code: keep it lifted
 

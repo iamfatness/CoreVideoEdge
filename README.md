@@ -76,7 +76,9 @@ SDK runtime copied beside it), `corevideo-zoom-engine-fake.exe`;
 
 `validate-edge-iso.mjs` drives `corevideo-edge.exe` only through its control
 API against the fake engine. It joins, checks nothing is subscribed until
-asked, checks the cap refuses a 7th source, subscribes N, records, stops,
+asked, checks the cap refuses one more than the cap (8 by default), subscribes N,
+turns Engine Off and On (every feed stops, then returns with no re-routing),
+checks the Monitor preview files are live with a measured fps, records, stops,
 then checks every file with ffprobe and ffmpeg. Needs Node 18+ and ffmpeg/ffprobe
 on PATH.
 
@@ -85,6 +87,10 @@ node scripts\validate-edge-iso.mjs                          # 4 ISOs, 20 s, 30 f
 node scripts\validate-edge-iso.mjs --sources 6 --seconds 60  # the full cap
 node scripts\validate-edge-iso.mjs --sources 6 --seconds 30 --fps 60
 node scripts\validate-edge-iso.mjs --sources 6 --seconds 50 --silent 3   # 3 guests never speak
+node scripts\validate-edge-iso.mjs --sources 6 --seconds 30 --room-move  # breakout move mid-take and back
+node scripts\validate-edge-iso.mjs --sources 4 --seconds 15 --format 720/30 --fps 60   # record format
+node scripts\validate-edge-iso.mjs --sources 3 --seconds 10 --feeds ndi  # NDI feeds, received by the probe
+node scripts\validate-edge-iso.mjs --sources 3 --seconds 10 --feeds srt  # SRT feeds, received by FFmpeg listeners (Pro's role)
 ```
 
 In a live meeting (the node must be signed in when the meeting refuses
@@ -116,6 +122,11 @@ Results on the dev box (2026-11-08, NVIDIA hardware H.264, fake engine):
 | 6 ISOs, 30 s, 60 fps | 1800 frames each, 0 lost, clap A/V skew 16-18 ms, spread 2.8 ms |
 | 6 ISOs, 50 s, 3 silent guests | node memory flat at ~530 MB, encoder backlog 0, silent ISOs carry a full-length silent track, clap spread 2.4 ms |
 | **Live Zoom** (2026-11-09), 6 guests, 60 s | 0 lost, 0 dropped, encoder backlog 0, all ISOs end within 43 ms; node peak ~620 MB. Zoom delivered these guests at 1280x720 (upscaled into the 1080p files) |
+| Breakout move mid-take (fake, `--room-move`) | node stays in the meeting, take keeps running, every routed guest back in their slot and received; guests absent from the room hold their frame and record silence |
+| 720p / 30 fps constant from a 60 fps source | 1280x720, `avg_frame_rate=30/1`, clap alignment intact; 1080p/60 also passes |
+| NDI feeds (fake) | probe receives `CoreVideo Edge <node> S<n>` at 1920x1080 ~30 fps, 48 kHz stereo, guest metadata |
+| SRT feeds (fake, encrypted) | FFmpeg listener records h264 1920x1080 + aac 48 kHz; an unlistened slot says "Pro is not listening at host:port"; passphrase never in state or log |
+| **Live Zoom** (2026-11-09), 8 guests (cap), 60 s | 8 ISOs, 0 lost, backlog 0-1, all 1080p + AAC ending together; all 8 previews live; NDI feeds received (with audio after the silent-guest fix) |
 
 The first live take failed: guests who never spoke never advanced their audio
 track, the MP4 muxer held every one of their video frames waiting for it, and
@@ -133,6 +144,25 @@ same; the audio ring carries no source timestamps). The skew halves when the
 fake runs at 60 fps. The AAC path itself adds 0 samples (unit-tested). Live
 Zoom delivers audio every 10 ms. **The live-meeting number has not been
 measured yet.**
+
+## Feeds to CoreVideo Pro (NDI / SRT)
+
+Routing > **Send to Pro** (or `{"cmd":"set-feeds",...}`, see PROTOCOL.md) sends
+every routed slot to Pro live. Identities follow the slot, not the guest, so a
+Pro input stays wired when the guest in a slot changes.
+
+- **NDI**: in Pro, add an NDI input and pick `CoreVideo Edge <node> S<n>` (Pro
+  discovers NDI sources on the LAN; Windows Pro only today). Source size and
+  rate pass through. Needs the NDI 6 Runtime (or NDI Tools) on the Edge machine.
+- **SRT**: in Pro, turn on SRT inputs (listener mode; input n listens on
+  `10000 + n - 1` by default). On Edge set Pro's address, the base port,
+  latency (Pro's default 120 ms) and an optional passphrase (same on both
+  sides). Each slot calls Pro's matching port: 1080p H.264 at 30 fps + AAC.
+  Needs FFmpeg on the Edge machine (PATH or `COREVIDEO_FFMPEG_DIR`).
+- Pro re-stamps incoming NDI/SRT media on its own clock; Pro's per-input audio
+  offset (+-500 ms) is the trim if a feed needs one.
+
+Design: `docs/superpowers/specs/2026-11-09-edge-to-pro-ndi-srt-design.md`.
 
 ## Run the operator app
 
