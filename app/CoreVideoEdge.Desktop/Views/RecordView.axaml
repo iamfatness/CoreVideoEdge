@@ -1,0 +1,172 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CoreVideoEdge.Desktop.ViewModels"
+             xmlns:c="using:CoreVideoEdge.Desktop.Controls"
+             x:Class="CoreVideoEdge.Desktop.Views.RecordView"
+             x:DataType="vm:RecordViewModel">
+  <ScrollViewer>
+    <Grid x:Name="Columns" Margin="16" ColumnDefinitions="380,16,*" RowDefinitions="Auto,Auto">
+      <!-- ================================================= settings + primary action -->
+      <StackPanel x:Name="LeftPane" Grid.Column="0" Spacing="16">
+        <Border Classes="panel">
+          <StackPanel Spacing="8">
+            <TextBlock Classes="section" Text="Settings" />
+            <TextBlock Classes="label" Text="Folder" Margin="0,8,0,0" />
+            <Grid ColumnDefinitions="*,Auto">
+              <Border Background="{StaticResource WellBrush}" CornerRadius="6" Padding="10,8" MinHeight="36" ToolTip.Tip="{Binding Folder}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <c:Icon Data="{StaticResource IconFolder}" Foreground="{StaticResource Text2Brush}" VerticalAlignment="Center" />
+                  <TextBlock Classes="mono" Text="{Binding FolderShort}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+              </Border>
+              <Button Grid.Column="1" Classes="ghost" Margin="8,0,0,0" Content="Change&#x2026;" Command="{Binding ChangeFolderCommand}" />
+            </Grid>
+            <TextBlock Classes="mono" Text="{Binding FreeText}"
+                       Foreground="{Binding FreeTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding FolderErrorVisible}">
+              <c:Icon Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+              <TextBlock Classes="error" Text="{Binding FolderError}" TextWrapping="Wrap" MaxWidth="300" />
+            </StackPanel>
+
+            <TextBlock Classes="label" Text="File prefix" Margin="0,8,0,0" />
+            <TextBox x:Name="PrefixBox" Text="{Binding Prefix}" IsReadOnly="{Binding Locked}" FontFamily="{StaticResource MonoFont}"
+                     AutomationProperties.Name="File prefix" />
+
+            <TextBlock Classes="label" Text="Resolution" Margin="0,8,0,0" />
+            <Border Classes="segtrack" HorizontalAlignment="Left" AutomationProperties.Name="Record resolution">
+              <StackPanel Orientation="Horizontal" Spacing="2">
+                <Button Classes="segment" Classes.active="{Binding Is1080}" Content="1080p" Command="{Binding SetHeightCommand}" CommandParameter="1080" />
+                <Button Classes="segment" Classes.active="{Binding Is720}" Content="720p" Command="{Binding SetHeightCommand}" CommandParameter="720" />
+              </StackPanel>
+            </Border>
+            <TextBlock Classes="label" Text="Frame rate" Margin="0,8,0,0" />
+            <Border Classes="segtrack" HorizontalAlignment="Left" AutomationProperties.Name="Record frame rate">
+              <StackPanel Orientation="Horizontal" Spacing="2">
+                <Button Classes="segment" Classes.active="{Binding FpsSource}" Content="Source" Command="{Binding SetFpsCommand}" CommandParameter="0"
+                        ToolTip.Tip="As Zoom delivers (variable)" />
+                <Button Classes="segment" Classes.active="{Binding Fps30}" Content="30" Command="{Binding SetFpsCommand}" CommandParameter="30" />
+                <Button Classes="segment" Classes.active="{Binding Fps60}" Content="60" Command="{Binding SetFpsCommand}" CommandParameter="60" />
+              </StackPanel>
+            </Border>
+            <TextBlock Classes="label" Text="{Binding LockedNote}" IsVisible="{Binding Recording}" />
+            <TextBlock Classes="error" Text="{Binding FormatError}" IsVisible="{Binding FormatErrorVisible}" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <!-- primary action -->
+        <StackPanel Spacing="8">
+          <Button HorizontalAlignment="Stretch" MinHeight="40" Classes.rec="{Binding Recording}" Command="{Binding PrimaryCommand}"
+                  AutomationProperties.Name="{Binding PrimaryText}" ToolTip.Tip="Ctrl+Shift+R">
+            <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+              <Ellipse Width="10" Height="10" Fill="{StaticResource RecBrush}" VerticalAlignment="Center"
+                       IsVisible="{Binding !Recording}" />
+              <c:Icon Classes="spin" Data="{StaticResource IconLoader}" Foreground="{StaticResource Text2Brush}" IsVisible="{Binding Busy}"
+                      RenderTransformOrigin="50%,50%" />
+              <TextBlock Text="{Binding PrimaryText}" VerticalAlignment="Center" />
+              <TextBlock Classes="mono" Text="{Binding PrimaryTimer}" VerticalAlignment="Center" FontWeight="SemiBold"
+                         IsVisible="{Binding Recording}" />
+            </StackPanel>
+          </Button>
+          <Border IsVisible="{Binding ConfirmStopVisible}" Background="{StaticResource ErrorTintBrush}" CornerRadius="6" Padding="12">
+            <StackPanel Spacing="8">
+              <TextBlock Text="Stop recording? Every ISO file closes now." TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                <Button Classes="ghost" Content="Keep recording" Command="{Binding CancelStopCommand}" />
+                <Button Classes="rec" Content="Stop recording" Command="{Binding ConfirmStopCommand}" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+          <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding ActionErrorVisible}">
+            <c:Icon Data="{StaticResource IconAlertCircle}" VerticalAlignment="Top" Margin="0,2,0,0"
+                    Foreground="{StaticResource ErrorTextBrush}" IsVisible="{Binding ActionErrorIsFailure}" />
+            <TextBlock Text="{Binding ActionError}" TextWrapping="Wrap" MaxWidth="350"
+                       Classes.error="{Binding ActionErrorIsFailure}" Classes.secondary="{Binding !ActionErrorIsFailure}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding RecordingWarningVisible}">
+            <c:Icon Data="{StaticResource IconAlertTriangle}" Foreground="{StaticResource WarnBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+            <TextBlock Classes="warn" Text="{Binding RecordingWarning}" TextWrapping="Wrap" MaxWidth="350" />
+          </StackPanel>
+        </StackPanel>
+      </StackPanel>
+
+      <!-- ================================================= per-ISO table -->
+      <Border x:Name="RightPane" Grid.Column="2" Classes="panel" Padding="0" VerticalAlignment="Top">
+        <StackPanel>
+          <DockPanel Margin="16,12">
+            <Button DockPanel.Dock="Right" Classes="link" Content="Open folder" Command="{Binding OpenFolderCommand}" IsVisible="{Binding HasFolder}" />
+            <TextBlock Classes="section" Text="{Binding TableTitle}" VerticalAlignment="Center" />
+          </DockPanel>
+          <Panel IsVisible="{Binding EmptyVisible}" Margin="16,0,16,16">
+            <Rectangle Stroke="{StaticResource CtlBorderBrush}" StrokeThickness="1" StrokeDashArray="4,3" RadiusX="8" RadiusY="8" />
+            <StackPanel Margin="24" Spacing="12">
+              <TextBlock Classes="secondary" Text="No ISO sources armed. Arm participants in the ISO band on Routing." TextWrapping="Wrap" />
+              <Button Classes="ghost" HorizontalAlignment="Left" Content="Go to Routing"
+                      Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).GoToRoutingCommand}" />
+            </StackPanel>
+          </Panel>
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" IsVisible="{Binding TableVisible}">
+            <StackPanel>
+              <!-- header 40 -->
+              <Grid Height="40" Margin="16,0" ColumnDefinitions="40,110,150,76,64,44,96,56,64,92" Background="Transparent">
+                <TextBlock Grid.Column="0" Classes="label" Text="Slot" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Classes="label" Text="Participant" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Classes="label" Text="File" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="3" Classes="label" Text="Duration" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="4" Classes="label" Text="Frames" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="5" Classes="label" Text="Lost" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="6" Classes="label" Text="Held" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="7" Classes="label" Text="Audio" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="8" Classes="label" Text="Size" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="9" Classes="label" Text="State" VerticalAlignment="Center" />
+              </Grid>
+              <Border Height="1" Background="{StaticResource HairlineBrush}" />
+              <ItemsControl ItemsSource="{Binding Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:IsoRowViewModel">
+                    <Border Classes.failed="{Binding Failed}" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1"
+                            AutomationProperties.Name="{Binding AccessibleName}">
+                      <Border.Styles>
+                        <Style Selector="Border.failed"><Setter Property="Background" Value="{StaticResource ErrorTintBrush}" /></Style>
+                      </Border.Styles>
+                      <StackPanel Margin="16,0">
+                        <Grid MinHeight="36" ColumnDefinitions="40,110,150,76,64,44,96,56,64,92">
+                          <TextBlock Grid.Column="0" Classes="mono table" Text="{Binding SlotTag}" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="Medium" TextTrimming="CharacterEllipsis"
+                                     ToolTip.Tip="{Binding Name}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                          <TextBlock Grid.Column="2" Classes="mono" Text="{Binding FileName}" TextTrimming="CharacterEllipsis"
+                                     ToolTip.Tip="{Binding FilePath}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                          <TextBlock Grid.Column="3" Classes="mono table" Text="{Binding Duration}" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="4" Classes="mono table" Text="{Binding Frames}" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="5" Classes="mono table" Text="{Binding Lost}" VerticalAlignment="Center"
+                                     Classes.warn="{Binding LostNonZero}" />
+                          <TextBlock Grid.Column="6" Classes="mono" Text="{Binding Held}" VerticalAlignment="Center"
+                                     TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Held}" />
+                          <c:AudioMeter Grid.Column="7" Width="48" Height="6" Orientation="Horizontal" HorizontalAlignment="Left"
+                                        LevelDb="{Binding AudioDb}" IsVisible="{Binding MeterVisible}" />
+                          <TextBlock Grid.Column="8" Classes="mono table" Text="{Binding Size}" VerticalAlignment="Center" />
+                          <Border Grid.Column="9" Classes="tagbox" HorizontalAlignment="Left"
+                                  Background="{Binding TagTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}">
+                            <TextBlock Classes="tag" Text="{Binding Tag}"
+                                       Foreground="{Binding TagTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=ink}" />
+                          </Border>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="40,0,0,8" IsVisible="{Binding HasWarning}">
+                          <c:Icon Width="14" Height="14" Data="{StaticResource IconAlertTriangle}" Foreground="{StaticResource WarnBrush}"
+                                  IsVisible="{Binding !Failed}" />
+                          <c:Icon Width="14" Height="14" Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}"
+                                  IsVisible="{Binding Failed}" />
+                          <TextBlock Text="{Binding Warning}" FontSize="12" LineHeight="16" TextWrapping="Wrap" MaxWidth="700"
+                                     Classes.error="{Binding Failed}" Classes.warn="{Binding !Failed}" />
+                        </StackPanel>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </ScrollViewer>
+        </StackPanel>
+      </Border>
+    </Grid>
+  </ScrollViewer>
+</UserControl>

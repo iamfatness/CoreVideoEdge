@@ -1,0 +1,109 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CoreVideoEdge.Desktop.ViewModels"
+             xmlns:c="using:CoreVideoEdge.Desktop.Controls"
+             x:Class="CoreVideoEdge.Desktop.Views.ConnectView"
+             x:DataType="vm:ConnectViewModel">
+  <ScrollViewer>
+    <StackPanel Width="560" Margin="16,32,16,24" Spacing="8" HorizontalAlignment="Center">
+      <TextBlock Classes="title" Text="Connect" Margin="0,0,0,8" />
+
+      <!-- 1. Sign in -->
+      <Border Classes="panel">
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <c:Icon Grid.Column="0" Margin="0,2,12,0" VerticalAlignment="Top"
+                  Data="{Binding SignInTone, Converter={x:Static c:ToneIconConverter.Instance}}"
+                  Foreground="{Binding SignInTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+          <StackPanel Grid.Column="1" Spacing="4">
+            <TextBlock Classes="section" Text="1. Sign in to Zoom" />
+            <TextBlock Classes="secondary" Text="{Binding SignInDetail}" TextWrapping="Wrap" />
+          </StackPanel>
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="12,0,0,0">
+            <Button Classes="primary" Content="{Binding SignInButtonText}" Command="{Binding SignInCommand}" IsVisible="{Binding SignInVisible}" />
+            <Button Classes="ghost" Content="Sign out" Command="{Binding SignOutCommand}" IsVisible="{Binding SignedIn}" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- 2. Join -->
+      <Border Classes="panel">
+        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto">
+          <c:Icon Grid.Column="0" Margin="0,2,12,0" VerticalAlignment="Top"
+                  Data="{Binding JoinTone, Converter={x:Static c:ToneIconConverter.Instance}}"
+                  Foreground="{Binding JoinTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+          <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="section" Text="2. Join meeting" />
+              <TextBlock Classes="secondary" Text="{Binding JoinDetail}" TextWrapping="Wrap" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="ghost" Content="Leave" Command="{Binding LeaveCommand}" IsVisible="{Binding LeaveVisible}"
+                    VerticalAlignment="Center" Margin="12,0,0,0" />
+          </Grid>
+          <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6" Margin="0,12,0,0" IsVisible="{Binding JoinVisible}">
+            <TextBlock Classes="label" Text="Meeting link" />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Grid.Column="0" Text="{Binding MeetingLink}" IsEnabled="{Binding MeetingFieldEnabled}"
+                       AutomationProperties.Name="Meeting link" />
+              <Button Grid.Column="1" Classes="primary" Margin="8,0,0,0" Command="{Binding JoinCommand}"
+                      AutomationProperties.Name="{Binding JoinButtonText}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <c:Icon Classes="spin" Data="{StaticResource IconLoader}" Foreground="{StaticResource Text2Brush}"
+                          IsVisible="{Binding Joining}" RenderTransformOrigin="50%,50%" />
+                  <TextBlock Text="{Binding JoinButtonText}" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
+            </Grid>
+            <TextBlock Classes="label" Text="Paste the full invite link with the passcode." />
+            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding JoinErrorVisible}">
+              <c:Icon Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+              <TextBlock Classes="error" Text="{Binding JoinError}" TextWrapping="Wrap" MaxWidth="480" />
+            </StackPanel>
+            <Button Classes="ghost" HorizontalAlignment="Left" IsVisible="{Binding CanEndOther}" Command="{Binding JoinEndOtherCommand}"
+                    Content="End this account's other meeting and join" />
+          </StackPanel>
+          <!-- Leave while recording: confirm inline (destructive) -->
+          <Border Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" IsVisible="{Binding ConfirmLeaveVisible}"
+                  Background="{StaticResource ErrorTintBrush}" CornerRadius="6" Padding="12">
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBlock Text="Leaving stops the take and finalizes every ISO file." TextWrapping="Wrap" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Classes="ghost" Content="Stay" Margin="8,0" Command="{Binding CancelLeaveCommand}" />
+              <Button Grid.Column="2" Classes="rec" Content="Stop and leave" Command="{Binding ConfirmLeaveCommand}" />
+            </Grid>
+          </Border>
+        </Grid>
+      </Border>
+
+      <!-- 3. Engine: a latching hardware-style key -->
+      <Border Classes="panel">
+        <StackPanel Spacing="12">
+          <TextBlock Classes="section" Text="3. Engine" />
+          <Button Classes="engine" Classes.live="{Binding EngineTone, Converter={x:Static c:ToneIsConverter.Instance}, ConverterParameter=Live}"
+                  Classes.warn="{Binding EngineTone, Converter={x:Static c:ToneIsConverter.Instance}, ConverterParameter=Warn}"
+                  Classes.error="{Binding EngineTone, Converter={x:Static c:ToneIsConverter.Instance}, ConverterParameter=Error}"
+                  Command="{Binding ToggleEngineCommand}" HorizontalAlignment="Stretch"
+                  AutomationProperties.Name="{Binding EngineButtonName}" AutomationProperties.LiveSetting="Polite">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <!-- lamp -->
+              <Panel Width="12" Height="12" Margin="0,0,12,0" VerticalAlignment="Center">
+                <Ellipse Width="12" Height="12" Classes.pulse="{Binding EnginePulse}"
+                         Fill="{Binding EngineTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
+              </Panel>
+              <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center" Margin="0,6">
+                <TextBlock Text="{Binding EngineTitle}" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding EngineDetail}" Classes="secondary" TextWrapping="Wrap" FontWeight="Normal" />
+              </StackPanel>
+              <c:Icon Grid.Column="2" Data="{StaticResource IconPower}" VerticalAlignment="Center" Margin="12,0,0,0"
+                      Foreground="{Binding EngineTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+            </Grid>
+          </Button>
+          <Button Classes="ghost" HorizontalAlignment="Left" Content="Retry the request" Command="{Binding RetryEngineCommand}"
+                  IsVisible="{Binding EngineTone, Converter={x:Static c:ToneIsConverter.Instance}, ConverterParameter=Error}" />
+          <StackPanel Spacing="4" IsVisible="{Binding EngineWarningsVisible}">
+            <TextBlock Classes="label" Text="Engine reports" />
+            <TextBlock Classes="mono warn" Text="{Binding EngineWarningsText}" TextWrapping="Wrap" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

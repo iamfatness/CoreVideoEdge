@@ -28,24 +28,9 @@ public static class OAuthCallbackRelay
     // same registration CoreVideo Pro's unpackaged shell writes. Called when the
     // operator clicks Sign in, not at startup: on a machine that also runs
     // CoreVideo Pro, the most recent sign-in owns the scheme.
-    public static bool TryRegisterProtocolHandler(string exePath, out string? error)
-    {
-        error = null;
-        try
-        {
-            using var protocolKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey($@"Software\Classes\{Protocol}");
-            protocolKey.SetValue("", $"URL:{Protocol} Protocol");
-            protocolKey.SetValue("URL Protocol", "");
-            using var commandKey = protocolKey.CreateSubKey(@"shell\open\command");
-            commandKey.SetValue("", $"\"{exePath}\" \"%1\"");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-    }
+    // The platform seam lives in EdgePlatform.cs (Windows: HKCU; macOS: bundle).
+    public static bool TryRegisterProtocolHandler(string exePath, out string? error) =>
+        EdgeUrlScheme.ForCurrentPlatform().TryRegister(Protocol, exePath, out error);
 
     public static bool TryForwardToPrimary(string callbackUrl, TimeSpan timeout)
     {

@@ -1,12 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <!-- Cross-platform: the operator app runs on Windows today and macOS next.
+         Windows-only pieces (DPAPI, the HKCU corevideo:// registration) sit
+         behind the EdgePlatform seams and are guarded at run time. -->
+    <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>CoreVideoEdge</RootNamespace>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

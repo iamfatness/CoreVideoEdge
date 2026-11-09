@@ -19,6 +19,11 @@ constexpr auto kAuthTimeout = std::chrono::seconds(60);
 constexpr auto kJoinTimeout = std::chrono::seconds(90);
 constexpr auto kEngineSilence = std::chrono::seconds(10);
 constexpr auto kReceivingWindow = std::chrono::seconds(3);
+constexpr auto kRoomMoveTimeout = std::chrono::seconds(90);
+// Zoom SDK MeetingStatus values (meeting_service_interface.h, SDK 7.0.5).
+constexpr int kStatusReconnecting = 5;
+constexpr int kStatusJoinBreakout = 14;
+constexpr int kStatusLeaveBreakout = 15;
 
 // CoreVideo Pro's embedded Meeting SDK public app key
 // (native/src/config/ZoomMeetingSdkConfig.h). A PUBLIC client identifier, not a
@@ -62,6 +67,8 @@ EdgeController::EdgeController(EdgeOptions options, Output output)
 
 EdgeController::~EdgeController() {
   if (session_.active()) session_.stop();
+  preview_.stop();
+  feeds_.stopAll();
   engine_.stop();
 }
 
@@ -77,6 +84,11 @@ void EdgeController::postCommand(std::string line) { post(Command{std::move(line
 void EdgeController::postEndOfInput() { post(EndOfInput{}); }
 
 int EdgeController::run() {
+  {
+    std::string previewError;
+    if (!preview_.start(PreviewPublisher::defaultDir(), previewError))
+      warnings_.push_back("Monitor previews unavailable: " + previewError);
+  }
   publishState(true);
   while (!quit_) {
     std::deque<Item> batch;
@@ -142,6 +154,12 @@ void EdgeController::handleCommand(const std::string& line) {
   } else if (cmd == "set-file-prefix") {
     if (session_.active()) error = "Stop recording before changing the file prefix.";
     else filePrefix_ = trimCopy(c.getString("prefix")).empty() ? "edge" : trimCopy(c.getString("prefix"));
+  } else if (cmd == "engine") {
+    error = cmdEngine(c);
+  } else if (cmd == "set-feeds") {
+    error = cmdSetFeeds(c);
+  } else if (cmd == "set-record-format") {
+    error = cmdRecordFormat(c);
   } else if (cmd == "record-start") {
     error = cmdRecordStart();
   } else if (cmd == "record-stop") {
@@ -184,6 +202,7 @@ std::string EdgeController::cmdJoin(const Json& c) {
   lastError_.clear();
   warnings_.clear();
   canEndOtherSession_ = false;
+  movingRooms_ = awaitingArrival_ = false;
   roster_.clear();
   rosterKnown_ = false;
   rawMediaActive_.reset();
@@ -212,6 +231,7 @@ std::string EdgeController::cmdJoin(const Json& c) {
 }
 
 std::string EdgeController::cmdLeave() {
+  movingRooms_ = awaitingArrival_ = false;
   if (phase_ == Phase::Idle) return {};
   if (session_.active()) stopTake("Stopped because the node left the meeting.");
   pendingJoin_.reset();
@@ -283,6 +303,9 @@ std::string EdgeController::cmdRecordStart() {
   request.isoRingEpoch = ++isoRingEpoch_;
   request.writer.videoBitrateMbps = options_.config.videoBitrateMbps;
   request.writer.hardwareEncode = options_.config.hardwareEncode;
+  request.writer.height = recordHeight_;
+  request.writer.width = recordHeight_ * 16 / 9;
+  request.writer.constantFps = recordFps_;
   auto selections = book_.selections();
   std::sort(selections.begin(), selections.end(), [](const auto& a, const auto& b) { return a.slot < b.slot; });
   for (const auto& s : selections) {
@@ -327,6 +350,7 @@ void EdgeController::stopTake(const std::string& reason) {
 // ---------------------------------------------------------------------------
 
 void EdgeController::fail(const std::string& message) {
+  movingRooms_ = awaitingArrival_ = false;
   core::nativeLogf("[edge] failed: %s\n", message.c_str());
   lastError_ = message;
   if (session_.active()) stopTake("Stopped: " + message);
@@ -384,9 +408,53 @@ void EdgeController::applyActions(const std::vector<SubscriptionAction>& actions
   if (!actions.empty()) markDirty();
 }
 
+void EdgeController::resubscribeAll() {
+  for (const auto& s : book_.selections()) {
+    if (!s.present) continue;
+    sendSubscribe(s.slot, s.participantId);
+    if (slotIsRecording(s.slot)) sendIsoDemand(s.slot, isoRingEpoch_);
+  }
+}
+
+std::string EdgeController::cmdEngine(const Json& c) {
+  const auto* onValue = c.get("on");
+  const bool on = !onValue || onValue->asBool(true);
+  if (!on && session_.active()) return "Stop recording before turning the engine off (the ISOs would go black).";
+  engineOn_ = on;
+  if (phase_ != Phase::InMeeting) return {};  // applies when the node is next in a meeting
+  // On: (re)request raw data; asks the host for record permission when this
+  // account lacks it. Toggling Off then On is the operator's re-request after a
+  // breakout move or a denied grant.
+  (void)engine_.send(on ? modules::buildZoomEngineStartMediaCommand() : std::string(R"({"cmd":"stop_media"})"));
+  return {};
+}
+
+std::string EdgeController::cmdSetFeeds(const Json& c) {
+  FeedMode mode = feeds_.mode();
+  if (c.get("mode") && !parseFeedMode(c.getString("mode"), mode)) return "Feed mode must be off, ndi or srt.";
+  SrtSettings srt = feeds_.srt();
+  if (c.get("srtHost")) srt.host = trimCopy(c.getString("srtHost"));
+  if (c.get("srtBasePort")) srt.basePort = static_cast<int>(c.getNumber("srtBasePort"));
+  if (c.get("srtLatencyMs")) srt.latencyMs = static_cast<int>(c.getNumber("srtLatencyMs"));
+  if (c.get("srtPassphrase")) srt.passphrase = c.getString("srtPassphrase");  // never logged, never in state
+  return feeds_.configure(mode, srt, displayName_);
+}
+
+std::string EdgeController::cmdRecordFormat(const Json& c) {
+  if (session_.active()) return "Stop recording before changing the record format.";
+  const int height = static_cast<int>(c.getNumber("height", recordHeight_));
+  const int fps = static_cast<int>(c.getNumber("fps", recordFps_));
+  if (height != 1080 && height != 720) return "Record resolution must be 1080 or 720.";
+  if (fps != 0 && fps != 30 && fps != 60) return "Record frame rate must be 0 (as Zoom delivers), 30 or 60.";
+  recordHeight_ = height;
+  recordFps_ = fps;
+  return {};
+}
+
 void EdgeController::handleNotice(const EngineNotice& notice) {
   if (notice.generation != engine_.generation()) return;  // a retired engine
   if (notice.kind == EngineNotice::Kind::Exited) {
+    movingRooms_ = awaitingArrival_ = false;
     if (phase_ == Phase::Leaving) {
       phase_ = Phase::Idle;
       stopEngine();
@@ -425,16 +493,40 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
            ". Sign in with Zoom again, or check COREVIDEO_ZOOM_SDK_JWT.");
       break;
     case K::Joined:
+      if (movingRooms_) core::nativeLogf("[meeting] arrived after a room move; re-arming\n");
+      movingRooms_ = awaitingArrival_ = false;
       phase_ = Phase::InMeeting;
       phaseSince_ = Clock::now();
-      // Ask for raw data now. If this account may not record, the engine asks
-      // the host and re-arms by itself when the host allows it.
-      (void)engine_.send(modules::buildZoomEngineStartMediaCommand());
+      // Engine On: ask for raw data now. If this account may not record, the
+      // engine asks the host and re-arms by itself when the host allows it.
+      if (engineOn_) (void)engine_.send(modules::buildZoomEngineStartMediaCommand());
       break;
     case K::Left:
+      if (movingRooms_ && phase_ == Phase::InMeeting) {
+        // A breakout-room move (or a reconnect) is reported as left + joined.
+        // Keep the engine, the routing slots and the take: guests re-attach by
+        // name when the new room's roster arrives, and ISOs hold their last
+        // frame and write silence through the gap (counted, not hidden).
+        core::nativeLogf("[meeting] moving rooms: keeping engine, slots and take\n");
+        // The arrival timeout runs from here, keyed on this flag (not on the
+        // rawMedia reason string, which later engine events overwrite).
+        awaitingArrival_ = true;
+        movingSince_ = Clock::now();
+        roster_.clear();
+        rosterKnown_ = false;
+        received_.clear();
+        rawMediaActive_ = false;
+        rawMediaReason_ = "moving_rooms";
+        std::vector<SubscriptionAction> none;
+        book_.applyRoster({}, none);  // every slot not present until the new room lists them
+        break;
+      }
+      movingRooms_ = awaitingArrival_ = false;
       if (session_.active()) stopTake("Stopped because the meeting ended or this node was removed.");
-      if (phase_ != Phase::Leaving) lastError_ = "The meeting ended or this node was removed from it.";
-      phase_ = Phase::Idle;
+      // A failed join is followed by `left`; keep the engine's specific reason
+      // (live 2026-11-09: "does not admit anonymous apps" was overwritten).
+      if (phase_ == Phase::InMeeting) lastError_ = "The meeting ended or this node was removed from it.";
+      if (phase_ != Phase::Failed) phase_ = Phase::Idle;
       roster_.clear();
       rosterKnown_ = false;
       book_.clear();
@@ -454,10 +546,15 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
     case K::Frame:
       if (!e.sourceUuid.empty() && e.width && e.height) received_[e.sourceUuid] = {e.width, e.height, Clock::now()};
       break;
-    case K::RawMediaStatus:
+    case K::RawMediaStatus: {
+      const bool wasActive = rawMediaActive_.value_or(false);
       rawMediaActive_ = e.rawMediaActive;
       rawMediaReason_ = e.message;
+      // The engine forgets every subscription when raw media stops (Engine
+      // Off, a room move, a lost grant). Re-send the routing when it returns.
+      if (e.rawMediaActive && !wasActive) resubscribeAll();
       break;
+    }
     case K::Error: {
       const bool joinFailure = e.message.rfind("join_failed", 0) == 0 || e.message.rfind("meeting_failed", 0) == 0 ||
                                e.message == "invalid_meeting_id" || e.stage == "join";
@@ -473,8 +570,18 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
       }
       break;
     }
+    case K::Debug:
+      if (notice.meetingStatus && (*notice.meetingStatus == kStatusJoinBreakout ||
+                                   *notice.meetingStatus == kStatusLeaveBreakout ||
+                                   *notice.meetingStatus == kStatusReconnecting)) {
+        if (!movingRooms_) core::nativeLogf("[meeting] room move / reconnect (status %d)\n", *notice.meetingStatus);
+        movingRooms_ = true;
+        movingSince_ = Clock::now();
+        break;
+      }
+      return;
     default:
-      return;  // ping/debug: liveness only, no state change
+      return;  // ping: liveness only, no state change
   }
   markDirty();
 }
@@ -485,6 +592,20 @@ void EdgeController::tick() {
     fail("Timed out waiting for Zoom Meeting SDK authentication.");
   } else if (phase_ == Phase::Joining && now - phaseSince_ > kJoinTimeout) {
     fail("Timed out waiting for the Zoom meeting join result.");
+  } else if (movingRooms_ && !awaitingArrival_ && now - movingSince_ > std::chrono::seconds(30)) {
+    // The SDK announced a move / reconnect that never disconnected us: done.
+    movingRooms_ = false;
+    markDirty();
+  } else if (awaitingArrival_ && now - movingSince_ > kRoomMoveTimeout) {
+    // Left for a room move but never arrived anywhere: it was a real leave.
+    movingRooms_ = awaitingArrival_ = false;
+    if (session_.active()) stopTake("Stopped because the node never arrived in the new room.");
+    lastError_ = "Zoom moved this node but it never arrived in a room.";
+    phase_ = Phase::Idle;
+    roster_.clear();
+    book_.clear();
+    stopEngine();
+    markDirty();
   } else if (phase_ == Phase::Leaving && now - phaseSince_ > std::chrono::seconds(10)) {
     stopEngine();
     phase_ = Phase::Idle;
@@ -498,6 +619,19 @@ void EdgeController::tick() {
     markDirty();  // health counters move continuously while recording
   }
   if (phase_ == Phase::InMeeting) markDirty();  // "receiving" ages
+  // Monitor previews follow the routing.
+  std::vector<PreviewSlot> previewSlots;
+  if (phase_ == Phase::InMeeting && engine_.running()) {
+    for (const auto& s : book_.selections()) previewSlots.push_back({s.slot, slotSourceUuid(s.slot), s.participantId});
+  }
+  preview_.setSlots(engine_.shmPrefix(), std::move(previewSlots));
+  // Live feeds to Pro follow the routing too (only while a mode is on).
+  std::vector<FeedSlotSpec> feedSlots;
+  if (phase_ == Phase::InMeeting && engine_.running()) {
+    for (const auto& s : book_.selections())
+      feedSlots.push_back({s.slot, slotSourceUuid(s.slot), s.participantId, s.displayName});
+  }
+  feeds_.setSlots(engine_.shmPrefix(), std::move(feedSlots));
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +659,34 @@ Json EdgeController::buildState() const {
       {"recordFolder", recordFolder_},
       {"filePrefix", filePrefix_},
   };
+  state.emplace("engineOn", engineOn_);
+  {
+    const auto srt = feeds_.srt();
+    Json::Object feeds{{"mode", feedModeName(feeds_.mode())}};
+    if (!srt.host.empty()) {
+      feeds.emplace("srtHost", srt.host);
+      feeds.emplace("srtBasePort", static_cast<double>(srt.basePort));
+      feeds.emplace("srtLatencyMs", static_cast<double>(srt.latencyMs));
+      feeds.emplace("srtEncrypted", !srt.passphrase.empty());
+    }
+    Json::Array slots;
+    for (const auto& h : feeds_.health()) {
+      Json::Object row{{"slot", h.slot}, {"target", h.target}, {"state", h.state},
+                       {"framesSent", static_cast<double>(h.framesSent)},
+                       {"framesSkipped", static_cast<double>(h.framesSkipped)},
+                       {"audioSeconds", static_cast<double>(h.audioSeconds)}};
+      if (h.receivers >= 0) row.emplace("receivers", h.receivers);
+      if (feeds_.mode() == FeedMode::Srt) row.emplace("connected", h.connected);
+      if (!h.error.empty()) row.emplace("error", h.error);
+      slots.emplace_back(std::move(row));
+    }
+    feeds.emplace("slots", Json(std::move(slots)));
+    state.emplace("feeds", Json(std::move(feeds)));
+  }
+  if (movingRooms_) state.emplace("movingRooms", true);
+  state.emplace("recordFormat", Json(Json::Object{{"width", static_cast<double>(recordHeight_ * 16 / 9)},
+                                                  {"height", static_cast<double>(recordHeight_)},
+                                                  {"fps", static_cast<double>(recordFps_)}}));
   if (!lastError_.empty()) state.emplace("error", lastError_);
   if (canEndOtherSession_) state.emplace("canEndOtherSession", true);
   if (!meetingId_.empty() && phase_ != Phase::Idle) state.emplace("meetingId", meetingId_);
@@ -552,6 +714,8 @@ Json EdgeController::buildState() const {
 
   // Participants: the roster as the SDK reports it, joined with this node's
   // subscriptions and the resolution actually being received.
+  const auto previewMeasures = preview_.measures();
+  if (!preview_.dir().empty()) state.emplace("previewDir", preview_.dir().string());
   Json::Array participants;
   for (const auto& p : roster_) {
     Json::Object row{
@@ -572,6 +736,10 @@ Json EdgeController::buildState() const {
                          {"height", static_cast<double>(r->second.height)},
                          {"msSinceFrame", static_cast<double>(msSince(r->second.at))},
                          {"receiving", Clock::now() - r->second.at < kReceivingWindow}};
+        if (const auto m = previewMeasures.find(s->slot); m != previewMeasures.end()) {
+          if (m->second.fpsX100 >= 0) rec.emplace("fps", m->second.fpsX100 / 100.0);
+          if (m->second.hasAudio) rec.emplace("audioDb", m->second.audioPeakDbX100 / 100.0);
+        }
         row.emplace("received", Json(std::move(rec)));
       }
     }
@@ -613,6 +781,11 @@ Json EdgeController::buildState() const {
         {"state", h.state},
         {"videoFrames", static_cast<double>(h.videoFrames)},
         {"videoLost", static_cast<double>(h.videoLost)},
+        {"videoDropped", static_cast<double>(h.videoDropped)},
+        {"heldRepeats", static_cast<double>(h.heldRepeats)},
+        {"encoderBacklogPeak", static_cast<double>(h.encoderBacklogPeak)},
+        {"cadenceRepeats", static_cast<double>(h.cadenceRepeats)},
+        {"cadenceSkipped", static_cast<double>(h.cadenceSkipped)},
         {"audioSamples", static_cast<double>(h.audioSamples)},
         {"silenceSamples", static_cast<double>(h.silenceSamples)},
         {"audioLostPackets", static_cast<double>(h.audioLostPackets)},
@@ -626,6 +799,8 @@ Json EdgeController::buildState() const {
     if (h.msSinceAudio >= 0) row.emplace("msSinceAudio", static_cast<double>(h.msSinceAudio));
     if (h.bytes > 0) row.emplace("bytes", static_cast<double>(h.bytes));
     std::string streamWarning = h.warning;
+    if (streamWarning.empty() && h.videoDropped > 0)
+      streamWarning = "Encoder fell behind: " + std::to_string(h.videoDropped) + " frame(s) dropped.";
     if (streamWarning.empty() && active && h.state == "recording") {
       if (h.msSinceVideo < 0 && (steadyNow100ns() - session_.epoch100ns()) > 50'000'000)
         streamWarning = "No video received yet.";

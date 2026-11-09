@@ -12,6 +12,8 @@
 #include "edge/EdgeConfig.h"
 #include "edge/EngineSupervisor.h"
 #include "edge/IsoSession.h"
+#include "edge/FeedSender.h"
+#include "edge/PreviewPublisher.h"
 #include "edge/SubscriptionPolicy.h"
 #include "rpc/Json.h"
 
@@ -71,6 +73,10 @@ class EdgeController {
   std::string cmdIso(const rpc::Json& c);
   std::string cmdRecordStart();
   std::string cmdRecordStop();
+  std::string cmdEngine(const rpc::Json& c);
+  std::string cmdRecordFormat(const rpc::Json& c);
+  std::string cmdSetFeeds(const rpc::Json& c);
+  void resubscribeAll();
 
   void fail(const std::string& message);
   void stopEngine();
@@ -115,6 +121,12 @@ class EdgeController {
   bool rosterKnown_ = false;
   std::optional<bool> rawMediaActive_;
   std::string rawMediaReason_;
+  bool engineOn_ = true;          // operator's Engine On: raw media requested while in a meeting
+  bool movingRooms_ = false;      // SDK reported a breakout move / reconnect; `left` is not the end
+  bool awaitingArrival_ = false;  // left for a move, not yet joined the new room (90 s limit)
+  std::chrono::steady_clock::time_point movingSince_{};
+  int recordHeight_ = 1080;       // 1080 | 720 (16:9)
+  int recordFps_ = 0;             // 0 = as Zoom delivers (VFR), 30 | 60 = constant
   struct Received { std::uint32_t width = 0, height = 0; std::chrono::steady_clock::time_point at; };
   std::map<std::string, Received> received_;  // by slot source_uuid, from engine frame beacons
 
@@ -123,6 +135,8 @@ class EdgeController {
   std::string filePrefix_;
 
   IsoSession session_;
+  PreviewPublisher preview_;
+  FeedSender feeds_;
   std::uint32_t isoRingEpoch_ = 0;
   std::string recordingWarning_;
   std::string lastTakeDir_;

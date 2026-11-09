@@ -1,0 +1,170 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CoreVideoEdge.Desktop.ViewModels"
+             xmlns:c="using:CoreVideoEdge.Desktop.Controls"
+             x:Class="CoreVideoEdge.Desktop.Views.MonitorView"
+             x:DataType="vm:MonitorViewModel">
+  <UserControl.Resources>
+    <!-- Video area: picture letterboxed on black, meter inside the right edge, slate when there is no live picture. -->
+    <DataTemplate x:Key="VideoArea" x:DataType="vm:TileViewModel">
+      <c:AspectPanel Background="{StaticResource VideoBrush}" ClipToBounds="True">
+        <Image Source="{Binding Bitmap}" Stretch="Uniform" Opacity="{Binding PictureOpacity}" IsVisible="{Binding HasPicture}"
+               RenderOptions.BitmapInterpolationMode="MediumQuality" />
+        <!-- held frame (dimmed to 40%) is labelled, never silently frozen -->
+        <Border IsVisible="{Binding HeldVisible}" Background="{StaticResource ErrorTintBrush}" CornerRadius="4" Padding="8,4"
+                HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <c:Icon Width="14" Height="14" Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}" />
+            <TextBlock Classes="mono" Text="{Binding HeldText}" Foreground="{StaticResource ErrorTextBrush}" />
+          </StackPanel>
+        </Border>
+        <!-- slate -->
+        <Border IsVisible="{Binding SlateVisible}" Background="{StaticResource WellBrush}">
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Margin="16" MaxWidth="360">
+            <Panel HorizontalAlignment="Center">
+              <Ellipse Width="10" Height="10" Fill="{StaticResource Text2Brush}" Classes.pulse="{Binding SlatePulse}" IsVisible="{Binding SlatePulse}" />
+              <c:Icon Width="20" Height="20" IsVisible="{Binding !SlatePulse}"
+                      Data="{Binding SlateTone, Converter={x:Static c:ToneIconConverter.Instance}}"
+                      Foreground="{Binding SlateTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+            </Panel>
+            <TextBlock Text="{Binding SlateText}" TextWrapping="Wrap" TextAlignment="Center"
+                       Foreground="{Binding SlateTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+          </StackPanel>
+        </Border>
+        <c:AudioMeter Width="6" HorizontalAlignment="Right" Margin="0,6,6,6" LevelDb="{Binding AudioDb}" IsVisible="{Binding MeterVisible}" />
+      </c:AspectPanel>
+    </DataTemplate>
+
+    <!-- Metadata strip: below the video, never over it. -->
+    <DataTemplate x:Key="Strip" x:DataType="vm:TileViewModel">
+      <StackPanel Background="{StaticResource SurfaceBrush}" Spacing="2" Margin="0" >
+        <Grid ColumnDefinitions="Auto,*,Auto" Margin="10,8,10,0">
+          <Border Classes="tagbox" Background="{StaticResource RaisedBrush}" Margin="0,0,8,0">
+            <TextBlock Classes="tag" Text="{Binding SlotTag}" Foreground="{StaticResource TextBrush}" />
+          </Border>
+          <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="Medium" TextTrimming="CharacterEllipsis"
+                     ToolTip.Tip="{Binding Name}" VerticalAlignment="Center" />
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+            <Border Classes="tagbox" BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" IsVisible="{Binding IsoVisible}"
+                    Classes.writing="{Binding IsoWriting}">
+              <Border.Styles>
+                <Style Selector="Border.writing"><Setter Property="Background" Value="{StaticResource RecBrush}" /><Setter Property="BorderBrush" Value="{StaticResource RecBrush}" /></Style>
+              </Border.Styles>
+              <Panel>
+                <TextBlock Classes="tag" Text="{Binding IsoText}" Foreground="{StaticResource AccentBrush}" IsVisible="{Binding !IsoWriting}" />
+                <TextBlock Classes="tag" Text="{Binding IsoText}" Foreground="{StaticResource OnRecBrush}" IsVisible="{Binding IsoWriting}" />
+              </Panel>
+            </Border>
+          </StackPanel>
+        </Grid>
+        <WrapPanel Margin="10,0,10,8" ItemSpacing="12">
+          <TextBlock Classes="mono" Text="{Binding Resolution}" Foreground="{StaticResource Text2Brush}" />
+          <TextBlock Classes="mono" Text="{Binding FpsText}" Foreground="{StaticResource Text2Brush}" />
+          <TextBlock Classes="mono" Text="{Binding LostText}" IsVisible="{Binding LostVisible}"
+                     Classes.warn="{Binding LostRising}" Classes.secondary="{Binding !LostRising}" />
+          <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding DegradedVisible}">
+            <c:Icon Width="14" Height="14" Data="{StaticResource IconAlertTriangle}" Foreground="{StaticResource WarnBrush}" />
+            <TextBlock Classes="mono warn" Text="{Binding DegradedText}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding FeedVisible}">
+            <Ellipse Width="6" Height="6" VerticalAlignment="Center"
+                     Fill="{Binding FeedTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
+            <TextBlock Classes="mono" Text="{Binding FeedText}"
+                       Foreground="{Binding FeedTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+          </StackPanel>
+        </WrapPanel>
+        <Grid ColumnDefinitions="Auto,*" Margin="10,0,10,8" IsVisible="{Binding FeedErrorVisible}">
+          <c:Icon Width="14" Height="14" Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}" VerticalAlignment="Top" Margin="0,1,6,0" />
+          <TextBlock Grid.Column="1" Classes="error" Text="{Binding FeedError}" TextWrapping="Wrap" FontSize="12" LineHeight="16" />
+        </Grid>
+      </StackPanel>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <Grid>
+    <!-- empty states -->
+    <Panel IsVisible="{Binding NotJoined}" VerticalAlignment="Top" HorizontalAlignment="Left" MaxWidth="520" Margin="16,24,16,0">
+      <Rectangle Stroke="{StaticResource CtlBorderBrush}" StrokeThickness="1" StrokeDashArray="4,3" RadiusX="8" RadiusY="8" />
+      <StackPanel Margin="24" Spacing="12">
+        <TextBlock Classes="section" Text="No meeting" />
+        <TextBlock Classes="secondary" Text="Join a meeting on Connect, then route participants to monitor them here." TextWrapping="Wrap" />
+        <Button Classes="ghost" HorizontalAlignment="Left" Content="Go to Connect"
+                Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).GoToConnectCommand}" />
+      </StackPanel>
+    </Panel>
+    <Panel IsVisible="{Binding NothingRouted}" VerticalAlignment="Top" HorizontalAlignment="Left" MaxWidth="520" Margin="16,24,16,0">
+      <Rectangle Stroke="{StaticResource CtlBorderBrush}" StrokeThickness="1" StrokeDashArray="4,3" RadiusX="8" RadiusY="8" />
+      <StackPanel Margin="24" Spacing="12">
+        <TextBlock Classes="section" Text="Nothing routed" />
+        <TextBlock Classes="secondary" Text="Route participants on Routing to monitor them here." TextWrapping="Wrap" />
+        <Button Classes="ghost" HorizontalAlignment="Left" Content="Go to Routing"
+                Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).GoToRoutingCommand}" />
+      </StackPanel>
+    </Panel>
+
+    <ScrollViewer IsVisible="{Binding !Empty}">
+      <ItemsControl x:Name="TileGrid" ItemsSource="{Binding Tiles}" Margin="12">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" ItemWidth="400" /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:TileViewModel">
+            <Button Classes="tile" Margin="4" Padding="0" HorizontalAlignment="Stretch" VerticalAlignment="Top"
+                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" Cursor="Arrow"
+                    Command="{Binding $parent[UserControl].((vm:MonitorViewModel)DataContext).OpenTileCommand}" CommandParameter="{Binding}"
+                    Classes.warn="{Binding BorderWarn}" Classes.error="{Binding BorderError}"
+                    AutomationProperties.Name="{Binding AccessibleName}" AutomationProperties.LiveSetting="Polite">
+              <StackPanel>
+                <ContentControl Content="{Binding}" ContentTemplate="{StaticResource VideoArea}" />
+                <ContentControl Content="{Binding}" ContentTemplate="{StaticResource Strip}" />
+              </StackPanel>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+        <ItemsControl.Styles>
+          <Style Selector="Button.tile">
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource HairlineBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{StaticResource RadiusPanel}" />
+            <Setter Property="ClipToBounds" Value="True" />
+            <Setter Property="FontWeight" Value="Normal" />
+          </Style>
+          <Style Selector="Button.tile:pointerover">
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+          </Style>
+          <Style Selector="Button.tile.warn">
+            <Setter Property="BorderBrush" Value="{StaticResource WarnBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+          </Style>
+          <Style Selector="Button.tile.error">
+            <Setter Property="BorderBrush" Value="{StaticResource ErrorTextBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+          </Style>
+        </ItemsControl.Styles>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <!-- larger single view: a flyout at 70% of the window, Esc closes. Not a workflow modal. -->
+    <Grid IsVisible="{Binding FocusVisible}" Background="#B3000000" ColumnDefinitions="15*,70*,15*" RowDefinitions="10*,80*,10*"
+          PointerPressed="OnScrimPressed">
+      <Border Grid.Row="1" Grid.Column="1" Background="{StaticResource RaisedBrush}" CornerRadius="8" BoxShadow="0 8 24 0 #8C000000"
+              ClipToBounds="True" VerticalAlignment="Center" DataContext="{Binding FocusedTile}" x:DataType="vm:TileViewModel"
+              PointerPressed="OnFlyoutPressed">
+        <StackPanel>
+          <ContentControl Content="{Binding}" ContentTemplate="{StaticResource VideoArea}" />
+          <Grid ColumnDefinitions="*,Auto">
+            <ContentControl Content="{Binding}" ContentTemplate="{StaticResource Strip}" />
+            <Button Grid.Column="1" Classes="ghost" Margin="8" VerticalAlignment="Top" AutomationProperties.Name="Close"
+                    Command="{Binding $parent[UserControl].((vm:MonitorViewModel)DataContext).CloseTileCommand}">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <c:Icon Data="{StaticResource IconX}" Foreground="{StaticResource TextBrush}" />
+                <TextBlock Text="Close (Esc)" VerticalAlignment="Center" />
+              </StackPanel>
+            </Button>
+          </Grid>
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Grid>
+</UserControl>

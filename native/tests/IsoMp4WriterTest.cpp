@@ -143,3 +143,109 @@ TEST(IsoMp4Writer, AudioDecodesAtTheSamplePositionItWasWritten) {
   EXPECT_TRUE(found >= 48000 - 48 && found <= 48000 + 48);  // within 1 ms
   if (!(found >= 48000 - 48 && found <= 48000 + 48)) std::fprintf(stderr, "  burst decoded at sample %lld\n", found);
 }
+
+// Live 2026-11-09: with no audio advancing, the MP4 muxer held every video
+// frame and the node reached 50 GB. The writer must never queue past its cap.
+TEST(IsoMp4Writer, VideoWithAStalledAudioTrackIsBoundedNotBuffered) {
+  MfScope mf;
+  const auto path = testDir() / "writer-backlog.mp4";
+  IsoMp4Writer writer;
+  IsoWriterSettings settings;
+  settings.hardwareEncode = false;
+  settings.maxVideoBacklog = 30;
+  std::string error;
+  ASSERT_TRUE(writer.open(path, settings, error));
+  std::vector<std::uint8_t> nv12(1920 * 1080 * 3 / 2, 128);
+  for (int i = 0; i < 300; ++i)  // 10 s of video, no audio at all
+    ASSERT_TRUE(writer.writeVideo(nv12.data(), 1'000 + static_cast<std::int64_t>(i) * 333'333, error));
+  std::fprintf(stderr, "  backlogPeak=%lld dropped=%lld frames=%lld\n",
+               static_cast<long long>(writer.videoBacklogPeak()), static_cast<long long>(writer.videoDropped()),
+               static_cast<long long>(writer.videoFrames()));
+  EXPECT_TRUE(writer.videoBacklogPeak() <= settings.maxVideoBacklog + 2);
+  EXPECT_TRUE(writer.videoDropped() > 0);  // the muxer really does hold video for audio
+  EXPECT_TRUE(writer.finalize(100'000'000, error));
+}
+
+TEST(IsoMp4Writer, RepeatingTheHeldFrameKeepsAStalledCameraMoving) {
+  MfScope mf;
+  const auto path = testDir() / "writer-held.mp4";
+  IsoMp4Writer writer;
+  IsoWriterSettings settings;
+  settings.hardwareEncode = false;
+  std::string error;
+  ASSERT_TRUE(writer.open(path, settings, error));
+  // Camera never sends a frame; 10 s of audio arrives; the held (preroll)
+  // frame is repeated once a second.
+  std::vector<float> tone(4800 * 2, 0.1f);
+  for (int s = 1; s <= 10; ++s) {
+    for (int k = 0; k < 10; ++k) ASSERT_TRUE(writer.writeAudio(tone.data(), 4800, error));
+    ASSERT_TRUE(writer.repeatHeldVideo(static_cast<std::int64_t>(s) * 10'000'000, error));
+  }
+  EXPECT_TRUE(writer.repeatHeldVideo(5 * 10'000'000, error));  // not after the held frame: no-op
+  EXPECT_EQ(writer.heldRepeats(), std::int64_t{9});  // the 10th is still held when finalize flushes it
+  EXPECT_EQ(writer.videoFrames(), std::int64_t{0});
+  EXPECT_TRUE(writer.finalize(100'000'000, error));
+  EXPECT_EQ(writer.heldRepeats(), std::int64_t{10});
+}
+
+// Record format: 30 fps constant from an irregular ~46 fps source (what live
+// Zoom delivered 2026-11-09). Every sample sits on the 1/30 s grid.
+TEST(IsoMp4Writer, ConstantThirtyFromAnIrregularSourceIsOnTheGrid) {
+  MfScope mf;
+  const auto path = testDir() / "writer-cfr30.mp4";
+  IsoMp4Writer writer;
+  IsoWriterSettings settings;
+  settings.hardwareEncode = false;
+  settings.constantFps = 30;
+  std::string error;
+  ASSERT_TRUE(writer.open(path, settings, error));
+  std::vector<std::uint8_t> nv12(1920 * 1080 * 3 / 2, 128);
+  std::int64_t pts = 0;
+  const int gaps[] = {217'391, 150'000, 260'000, 217'391, 90'000};  // ~46 fps, jittery
+  for (int i = 0; pts < 30'000'000; ++i) {  // 3 s
+    pts += gaps[i % 5];
+    ASSERT_TRUE(writer.writeVideo(nv12.data(), pts, error));
+  }
+  std::vector<float> tone(48000 * 3 * 2, 0.0f);
+  ASSERT_TRUE(writer.writeAudio(tone.data(), 48000 * 3, error));
+  // A camera stall of 1 s: the grid is filled while waiting.
+  ASSERT_TRUE(writer.repeatHeldVideo(40'000'000, error));
+  EXPECT_TRUE(writer.finalize(40'000'000, error));
+  std::fprintf(stderr, "  frames=%lld cadenceRepeats=%lld cadenceSkipped=%lld held=%lld\n",
+               static_cast<long long>(writer.videoFrames()), static_cast<long long>(writer.cadenceRepeats()),
+               static_cast<long long>(writer.cadenceSkipped()), static_cast<long long>(writer.heldRepeats()));
+  EXPECT_TRUE(writer.cadenceSkipped() > 0);  // 46 into 30: some arrivals share a slot
+  // The 1 s stall is filled either as stall repeats or, if the encoder was
+  // briefly backed up, by the final grid fill: either way the grid is complete.
+  EXPECT_EQ(writer.videoFrames() + writer.cadenceRepeats() + writer.heldRepeats() + writer.prerollFrames(), std::int64_t{120});
+  // 4 s at 30 fps = 120 samples (+-1 at the edges), all of them on the grid.
+  const auto out = run("ffprobe -v error -select_streams v -count_packets -show_entries stream=nb_read_packets,r_frame_rate,avg_frame_rate "
+                       "-of compact \"" + path.string() + "\" 2>&1");
+  if (out.find("not recognized") != std::string::npos || out.empty()) return;
+  std::fprintf(stderr, "  ffprobe: %s", out.c_str());
+  const auto at = out.find("nb_read_packets=");
+  ASSERT_TRUE(at != std::string::npos);
+  const int packets = std::atoi(out.c_str() + at + 16);
+  EXPECT_TRUE(packets >= 119 && packets <= 121);
+  EXPECT_TRUE(out.find("avg_frame_rate=30/1") != std::string::npos || out.find("r_frame_rate=30/1") != std::string::npos);
+}
+
+TEST(IsoMp4Writer, A720pRecordFormatWritesA720pFile) {
+  MfScope mf;
+  const auto path = testDir() / "writer-720.mp4";
+  IsoMp4Writer writer;
+  IsoWriterSettings settings;
+  settings.hardwareEncode = false;
+  settings.width = 1280;
+  settings.height = 720;
+  std::string error;
+  ASSERT_TRUE(writer.open(path, settings, error));
+  std::vector<std::uint8_t> nv12(1280 * 720 * 3 / 2, 100);
+  for (int i = 0; i < 30; ++i) ASSERT_TRUE(writer.writeVideo(nv12.data(), 333'333LL * i + 1, error));
+  std::vector<float> tone(48000 * 2, 0.0f);
+  ASSERT_TRUE(writer.writeAudio(tone.data(), 48000, error));
+  EXPECT_TRUE(writer.finalize(10'000'000, error));
+  const auto out = run("ffprobe -v error -select_streams v -show_entries stream=width,height -of compact \"" + path.string() + "\" 2>&1");
+  if (out.find("not recognized") != std::string::npos || out.empty()) return;
+  EXPECT_TRUE(out.find("width=1280|height=720") != std::string::npos);
+}

@@ -5,7 +5,7 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CoreVideoEdge.Core", "CoreVideoEdge.Core\CoreVideoEdge.Core.csproj", "{6D3B1F0A-2C51-4C1E-9E0B-0A1B2C3D4E01}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CoreVideoEdge.App", "CoreVideoEdge.App\CoreVideoEdge.App.csproj", "{6D3B1F0A-2C51-4C1E-9E0B-0A1B2C3D4E02}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CoreVideoEdge.Desktop", "CoreVideoEdge.Desktop\CoreVideoEdge.Desktop.csproj", "{6D3B1F0A-2C51-4C1E-9E0B-0A1B2C3D4E02}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CoreVideoEdge.Tests", "CoreVideoEdge.Tests\CoreVideoEdge.Tests.csproj", "{6D3B1F0A-2C51-4C1E-9E0B-0A1B2C3D4E03}"
 EndProject

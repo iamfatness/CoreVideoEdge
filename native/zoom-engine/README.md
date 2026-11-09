@@ -121,6 +121,12 @@ Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt
    position and length (`clap_burst_sample`). Placement and timing logic are
    unchanged.
 
+3. **Silent guests** (`fake/fake-engine.cpp`). `COREVIDEO_FAKE_SILENT_PARTICIPANTS=N`
+   makes the first N roster participants send no audio packets at all, the
+   way real Zoom sends nothing for a guest who never speaks. The fake used to
+   send every subscribed guest a continuous tone, which hid the defect that
+   took down the first live take (2026-11-09). Default 0 = unchanged.
+
 Otherwise the fake engine is unmodified. Edge launches it with
 `COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE=0` so it never streams a participant Edge
 did not explicitly subscribe.

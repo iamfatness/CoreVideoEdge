@@ -38,8 +38,20 @@ const seconds = Number(args.seconds ?? 20);
 const fps = Number(args.fps ?? 30);
 const outDir = resolve(args.out ?? join(root, 'build', 'validate-out'));
 const meeting = args.meeting ?? (fake ? 'https://zoom.us/j/1234567890?pwd=fake' : '');
+const silent = Number(args.silent ?? 0);
+const roomMove = fake && args['room-move'] === 'true';  // fake: a breakout move mid-take and back
+const roomStayMs = 4000;
+const roomMoveAtMs = 6000 + Math.round(seconds * 400);  // after join; lands inside the take
+const feeds = args.feeds ? String(args.feeds) : '';  // ndi | srt: live feeds to Pro, verified by a receiver
+const format = args.format ? String(args.format) : '';  // e.g. 720 or 720/30 or 1080/60
+const formatHeight = format ? Number(format.split('/')[0]) : 1080;
+const formatFps = format && format.includes('/') ? Number(format.split('/')[1]) : 0;  // fake: the first N roster guests never send audio
 const names = args.names ? args.names.split(',').map((s) => s.trim()).filter(Boolean) : [];
 
+let silentIds = new Set();
+let sawMovingRooms = false;
+let allStateText = '';
+const srtSecret = 'edge-validator-secret';
 const failures = [];
 const check = (ok, what) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}`);
@@ -67,6 +79,11 @@ if (fake) {
   env.COREVIDEO_FAKE_NO_CHURN = '1';
   env.COREVIDEO_FAKE_CLAP_MS = '2000';
   env.COREVIDEO_FAKE_ENGINE_FPS = String(fps);
+  env.COREVIDEO_FAKE_SILENT_PARTICIPANTS = String(silent);
+  if (roomMove) {
+    env.COREVIDEO_FAKE_ROOM_MOVE_AT_MS = String(roomMoveAtMs);
+    env.COREVIDEO_FAKE_ROOM_MOVE_MS = String(roomStayMs);
+  }
 }
 const child = spawn(exe, [fake ? '--fake' : '--engine', ...(fake ? [] : [join(bin, 'corevideo-zoom-engine.exe')]), '--config', configPath], {
   env,
@@ -90,7 +107,7 @@ child.stdout.on('data', (chunk) => {
     if (!line) continue;
     let message;
     try { message = JSON.parse(line); } catch { console.error('unparseable stdout line:', line); continue; }
-    if (message.type === 'state') state = message;
+    if (message.type === 'state') { allStateText += line; state = message; if (message.movingRooms) sawMovingRooms = true; }
     else if (message.type === 'result' && message.id && pending.has(message.id)) {
       pending.get(message.id)(message);
       pending.delete(message.id);
@@ -170,6 +187,7 @@ async function main() {
 
   await sleep(2000);
   const others = state.participants.filter((p) => !p.self);
+  silentIds = new Set(state.participants.slice(0, silent).map((p) => p.id));
   check(state.participants.every((p) => p.slot === undefined && p.received === undefined),
     `nothing subscribed or received before the operator asked (${others.length} others in the meeting)`);
   const self = state.participants.find((p) => p.self);
@@ -196,9 +214,14 @@ async function main() {
   } else {
     console.log(`INFO  only ${candidates.length} candidates; cap refusal not exercised`);
   }
+  const extraSlots = state.participants.filter((x) => accepted.some((a) => a.id === x.id) && !picks.includes(accepted.find((a) => a.id === x.id))).map((x) => x.slot);
   for (const p of accepted.filter((a) => !picks.includes(a))) {
     const r = await send('subscribe', { participantId: p.id, on: false });
     check(r.ok, `unsubscribed extra ${p.name}`);
+  }
+  if (extraSlots.length && state.previewDir) {
+    await sleep(800);
+    check(extraSlots.every((slot) => !existsSync(join(state.previewDir, `slot-${slot}.cvp`))), `unrouted slot preview files removed (${extraSlots.join(', ')})`);
   }
 
   const pickIds = new Set(picks.map((p) => p.id));
@@ -212,6 +235,50 @@ async function main() {
   check(state.participants.filter((p) => !pickIds.has(p.id)).every((p) => !p.received),
     'no unsubscribed participant is being received');
 
+  // Monitor previews: one memory-mapped file per routed slot (PROTOCOL.md).
+  await sleep(1500);
+  check(typeof state.previewDir === 'string' && existsSync(state.previewDir), `preview folder published (${state.previewDir})`);
+  for (const p of state.participants.filter((x) => pickIds.has(x.id))) {
+    const file = join(state.previewDir ?? '', `slot-${p.slot}.cvp`);
+    if (!check(existsSync(file), `${p.name}: preview file slot-${p.slot}.cvp exists`)) continue;
+    const b = readFileSync(file);
+    const magic = b.toString('latin1', 0, 4);
+    const [w, h, frames] = [b.readUInt32LE(12), b.readUInt32LE(16), b.readUInt32LE(32)];
+    const fpsX100 = b.readInt32LE(36);
+    const db = b.readInt32LE(40);
+    const heartbeat = Number(b.readBigInt64LE(48)), lastFrame = Number(b.readBigInt64LE(56));
+    let lit = 0;
+    for (let i = 64 + 2; i < b.length; i += 4 * 97) if (b[i] > 16) lit++;
+    // Live Zoom delivers in bursts while it ramps up after a subscribe.
+    check(magic === 'CVEP' && w === 480 && h === 270 && frames > 0 && heartbeat - lastFrame < (fake ? 1000 : 3000) && lit > 0,
+      `${p.name}: preview live (${frames} frames, last ${heartbeat - lastFrame} ms ago, ${lit} lit samples)`);
+    if (fake) {
+      check(fpsX100 >= (fps - 6) * 100 && fpsX100 <= (fps + 3) * 100 && Math.abs((p.received?.fps ?? 0) - fpsX100 / 100) < 6,
+        `${p.name}: measured ${fpsX100 / 100} fps in the preview, ${p.received?.fps} in state (source ${fps})`);
+      if (!silentIds.has(p.id)) check(db > -6000 && db <= 0 && typeof p.received?.audioDb === 'number',
+        `${p.name}: audio level measured (${db / 100} dBFS)`);
+    }
+  }
+
+  // Engine On: Off stops every feed (the engine forgets its subscriptions);
+  // On brings them all back without the operator re-routing anything.
+  if (fake && !roomMove) {
+    const off = await send('engine', { on: false });
+    check(off.ok && (await waitFor((s) => s.rawMedia?.active === false && s.engineOn === false, 10000, 'raw media off')),
+      'Engine Off: raw media released');
+    await sleep(3500);
+    check(state.participants.filter((p) => pickIds.has(p.id)).every((p) => !p.received?.receiving),
+      'Engine Off: no routed source is being received');
+    const on = await send('engine', { on: true });
+    check(on.ok && (await waitFor((s) => s.rawMedia?.active === true &&
+      s.participants?.filter((p) => pickIds.has(p.id)).every((p) => p.received?.receiving), 15000, 'feeds back')),
+      'Engine On: every routed source is received again with no re-routing');
+  }
+  if (format) {
+    const f = await send('set-record-format', { height: formatHeight, fps: formatFps });
+    check(f.ok, `record format ${formatHeight}p ${formatFps ? formatFps + ' fps constant' : 'as delivered'}${f.ok ? '' : ': ' + f.error}`);
+  }
+  if (feeds) await checkFeeds(pickIds);
   const folder = await send('set-record-folder', { path: outDir });
   check(folder.ok, `record folder set to ${outDir}`);
   const start = await send('record-start');
@@ -220,8 +287,14 @@ async function main() {
   for (let t = 0; t < seconds; t += 5) {
     await sleep(Math.min(5, seconds - t) * 1000);
     const line = (state.recording?.streams ?? []).map((s) =>
-      `${s.name}: ${s.videoFrames}f ${(s.audioSamples / 48000).toFixed(1)}s-audio lost=${s.videoLost}${s.warning ? ' WARN ' + s.warning : ''}`).join(' | ');
+      `${s.name}: ${s.videoFrames}f ${(s.audioSamples / 48000).toFixed(1)}s-audio lost=${s.videoLost} backlog<=${s.encoderBacklogPeak}${s.warning ? ' WARN ' + s.warning : ''}`).join(' | ');
     console.log(`      t=${Math.min(seconds, t + 5)}s  ${line}`);
+  }
+  if (roomMove) {
+    check(sawMovingRooms, 'the node reported a room move and stayed in the meeting (no take stop)');
+    check(state.phase === 'in-meeting' && state.recording?.active, 'after the move: still in the meeting, still recording');
+    check(state.participants?.filter((p) => pickIds.has(p.id)).every((p) => p.slot && p.received?.receiving),
+      'after the move: every routed guest is back in their slot and received again');
   }
   const stop = await send('record-stop');
   const takeSeconds = (Date.now() - takeStarted) / 1000;
@@ -234,11 +307,20 @@ async function main() {
   for (const s of health) {
     check(s.state === 'finalized' && !s.warning, `${s.name}: finalized (${s.encoder ?? 'encoder unknown'} encoder)${s.warning ? ' - ' + s.warning : ''}`);
     check(s.videoLost === 0, `${s.name}: no ISO arrival lost (lost=${s.videoLost})`);
+    // Live 2026-11-09: an unbounded encoder backlog took the machine to 50 GB.
+    check(s.videoDropped === 0 && s.encoderBacklogPeak <= 30,
+      `${s.name}: encoder kept up (backlog peak ${s.encoderBacklogPeak} samples, ${s.videoDropped} dropped)`);
     if (fake) {
-      const expected = fps * takeSeconds;
-      check(s.videoFrames >= expected * 0.9 && s.videoFrames <= expected * 1.05,
+      const effFps = formatFps || fps;
+      const expected = effFps * takeSeconds - (roomMove ? fps * (roomStayMs / 1000 + 1.5) : 0);
+      const total = s.videoFrames + (formatFps ? s.cadenceRepeats : 0);
+      check(roomMove ? s.videoFrames >= fps * (takeSeconds - roomStayMs / 1000 - 3) * 0.5 : total >= expected * 0.9 && total <= expected * 1.05,
         `${s.name}: ${s.videoFrames} frames for ${takeSeconds.toFixed(1)} s at ${fps} fps (expected ~${Math.round(expected)})`);
-      check(s.audioSamples > 0.9 * 48000 * takeSeconds, `${s.name}: ${(s.audioSamples / 48000).toFixed(2)} s of isolated audio`);
+      if (silentIds.has(s.participantId))
+        check(s.audioSamples === 0, `${s.name}: silent guest, no isolated audio (track is silence)`);
+      else
+        check(s.audioSamples > 0.9 * 48000 * (takeSeconds - (roomMove ? roomStayMs / 1000 + 2 : 0)),
+          `${s.name}: ${(s.audioSamples / 48000).toFixed(2)} s of isolated audio${roomMove ? ' (absent during the move is silence)' : ''}`);
     }
   }
 
@@ -264,7 +346,9 @@ async function main() {
     if (!check(probe, `${f}: ffprobe reads it`)) continue;
     const v = probe.streams.find((s) => s.codec_type === 'video');
     const a = probe.streams.find((s) => s.codec_type === 'audio');
-    check(v && v.codec_name === 'h264' && v.width === 1920 && v.height === 1080, `${f}: video ${v?.codec_name} ${v?.width}x${v?.height}`);
+    const wantW = Math.round(formatHeight * 16 / 9);
+    check(v && v.codec_name === 'h264' && v.width === wantW && v.height === formatHeight, `${f}: video ${v?.codec_name} ${v?.width}x${v?.height}`);
+    if (formatFps) check(v && v.avg_frame_rate === `${formatFps}/1`, `${f}: constant ${v?.avg_frame_rate} fps`);
     check(a && a.codec_name === 'aac' && Number(a.sample_rate) === 48000 && a.channels === 2,
       `${f}: audio ${a?.codec_name} ${a?.sample_rate} Hz x${a?.channels}`);
     const vd = Number(v?.duration), ad = Number(a?.duration), fd = Number(probe.format.duration);
@@ -284,6 +368,12 @@ async function main() {
       const path = join(dir, f);
       const v = videoClaps(path);
       const a = audioClaps(path);
+      const iso = health.find((s) => s.path && s.path.endsWith(f));
+      if (iso && silentIds.has(iso.participantId)) {
+        check(v.length >= 2 && a.length === 0, `${f}: silent guest: ${v.length} video claps, no audio claps`);
+        firstVideoClap.push(v[0]);
+        continue;
+      }
       if (!check(v.length >= 2 && a.length >= 2, `${f}: found ${v.length} video and ${a.length} audio claps`)) continue;
       // Pair each video clap with an audio clap within 0.5 s (claps are 2 s
       // apart). A clap cut by the take's start or stop has no partner.
@@ -302,6 +392,53 @@ async function main() {
       check(spread <= 40, `the same clap lands at the same time in every ISO (spread ${spread.toFixed(1)} ms)`);
     }
   }
+}
+
+// Live feeds: NDI is received by the probe (as Pro's NDI input would); SRT by
+// FFmpeg listening on Pro's ports and recording (exactly Pro's role).
+async function checkFeeds(pickIds) {
+  const routed = state.participants.filter((p) => pickIds.has(p.id));
+  if (feeds === 'ndi') {
+    const r = await send('set-feeds', { mode: 'ndi' });
+    if (!check(r.ok, `feeds: NDI on${r.ok ? '' : ': ' + r.error}`)) return;
+    await waitFor((s) => s.feeds?.slots?.length === routed.length && s.feeds.slots.every((f) => f.state === 'sending'), 15000, 'every feed sending');
+    for (const p of routed.slice(0, 2)) {
+      const f = state.feeds.slots.find((x) => x.slot === p.slot);
+      const probe = spawnSync(join(bin, 'corevideo-edge-ndi-probe.exe'), ['--name', f.target, '--seconds', '6'], { encoding: 'utf8', timeout: 60000 });
+      let m = {};
+      try { m = JSON.parse(probe.stdout.trim().split(/\r?\n/).pop()); } catch { m = { ok: false, error: probe.stdout + probe.stderr }; }
+      check(m.ok && (!fake || (m.width === 1920 && m.height === 1080 && m.fps >= fps * 0.85)) && m.audioRate === 48000 && m.audioChannels === 2 && m.audioSeconds > 4 && m.metadata,
+        `NDI ${f.target}: received ${m.width}x${m.height} at ${m.fps} fps, audio ${m.audioRate} Hz x${m.audioChannels} ${m.audioSeconds} s (peak ${m.audioPeakDb} dB), guest metadata ${m.metadata}${m.error ? ' ' + m.error : ''}`);
+    }
+    await sleep(500);
+    const after = state.feeds.slots.find((x) => x.slot === routed[0].slot);
+    check(after && typeof after.receivers === 'number', `NDI receivers measured by the sender (${after?.receivers})`);
+  } else if (feeds === 'srt') {
+    const listeners = routed.slice(0, 2).map((p) => {
+      const port = 20000 + p.slot - 1;
+      const file = join(outDir, `srt-slot-${p.slot}.ts`);
+      const proc = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', `srt://127.0.0.1:${port}?mode=listener&latency=120000&passphrase=${srtSecret}&pbkeylen=16`, '-c', 'copy', '-t', '8', file]);
+      return { p, port, file, proc };
+    });
+    await sleep(1000);
+    const r = await send('set-feeds', { mode: 'srt', srtHost: '127.0.0.1', srtBasePort: 20000, srtLatencyMs: 120, srtPassphrase: srtSecret });
+    if (!check(r.ok, `feeds: SRT on${r.ok ? '' : ': ' + r.error}`)) return;
+    await Promise.all(listeners.map((l) => new Promise((res) => { l.proc.on('exit', res); setTimeout(res, 30000); })));
+    for (const l of listeners) {
+      const probe = existsSync(l.file) ? ffprobe(l.file) : null;
+      const v = probe?.streams.find((s) => s.codec_type === 'video');
+      const a = probe?.streams.find((s) => s.codec_type === 'audio');
+      const d = Number(probe?.format?.duration ?? 0);
+      check(v?.codec_name === 'h264' && v.width === 1920 && v.height === 1080 && a?.codec_name === 'aac' && Number(a.sample_rate) === 48000 && d > 6,
+        `SRT slot ${l.p.slot} -> 127.0.0.1:${l.port}: ${v?.codec_name} ${v?.width}x${v?.height} + ${a?.codec_name} ${a?.sample_rate} Hz, ${d.toFixed(1)} s`);
+    }
+    check(state.feeds.srtEncrypted === true && !allStateText.includes(srtSecret) && !logLines.join('').includes(srtSecret),
+      'SRT passphrase used (encrypted) but never in any state line or the node log');
+    const f = state.feeds.slots.find((x) => x.slot === routed[2]?.slot);
+    if (f) check(f.state === 'failed' && /not listening/.test(f.error ?? ''), `a slot with no listener says so: "${f.error}"`);
+  }
+  const off = await send('set-feeds', { mode: 'off' });
+  check(off.ok && (await waitFor((s) => s.feeds?.mode === 'off' && s.feeds.slots.length === 0, 10000, 'feeds off')), 'feeds: off stops every feed');
 }
 
 try {

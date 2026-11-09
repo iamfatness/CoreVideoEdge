@@ -21,7 +21,7 @@ TEST(EdgeConfig, BadValuesAreErrorsNotSilentDefaults) {
   std::vector<std::string> errors;
   const auto c = parseEdgeConfig(R"({"maxSubscriptions":30,"subscribe":"Alice","hardwareEncode":"yes"})", errors);
   EXPECT_EQ(errors.size(), size_t{3});
-  EXPECT_EQ(c.maxSubscriptions, 6);
+  EXPECT_EQ(c.maxSubscriptions, 8);
 }
 
 TEST(EdgeConfig, NoRecordFolderIsInvented) {

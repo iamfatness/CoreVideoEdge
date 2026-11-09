@@ -2,6 +2,7 @@
 
 #include "core/BoundedAsyncLog.h"
 #include "edge/IsoAudioTimeline.h"
+#include "edge/FastConform.h"
 #include "edge/SteadyClock.h"
 #include "modules/IsoFrameConform.h"
 #include "modules/ZoomEngineClient.h"
@@ -148,17 +149,28 @@ void IsoSourceRecorder::run() {
 
   IsoAudioTimeline timeline(config_.writer.audioSampleRate);
   std::vector<std::uint8_t> nv12;
+  FastConform conform;
   std::vector<float> stereo;
   std::vector<modules::ZoomIsoVideoArrival> arrivals;
   std::vector<modules::ZoomEnginePcmAudioChunk> chunks;
   bool failed = false;
-  std::int64_t lastVideo100ns = 0, lastAudio100ns = 0;
+  std::int64_t lastVideo100ns = 0, lastAudio100ns = 0, lastVideoQueued100ns = 0;
+  constexpr std::int64_t kHeldRepeat100ns = 10'000'000;  // 1 s
   std::int64_t realAudio = 0, silenceAudio = 0, lostVideo = 0, lostAudio = 0;
   std::uint32_t lastW = 0, lastH = 0;
   bool warnedFormat = false;
 
+  // Per-5 s diagnostics (live 2026-11-09: ~6 frames/s lost on 5 of 6 ISOs,
+  // cause unknown). Where the recorder thread's time goes, and whether loss is
+  // ring overwrite (reader too slow) or torn copies (writer lapped a read).
+  struct Window {
+    std::int64_t arrivals = 0, overwritten = 0, lostAtStart = 0;
+    std::int64_t read100ns = 0, conform100ns = 0, write100ns = 0, worstDrain100ns = 0, worstGap100ns = 0;
+  } stats;
+  std::int64_t windowStart = steadyNow100ns(), lastDrainEnd = 0;
   const auto drain = [&]() {
     const auto now = steadyNow100ns();
+    if (lastDrainEnd) stats.worstGap100ns = std::max(stats.worstGap100ns, now - lastDrainEnd);
     // ---- video: every arrival since the last poll -------------------------
     if (videoRing.ptr) {
       const auto& header = *static_cast<const zoom_iso::Header*>(videoRing.ptr);
@@ -168,9 +180,13 @@ void IsoSourceRecorder::run() {
         videoNext = 0;
       arrivals.clear();
       modules::ZoomIsoRingReadEvidence evidence;
+      const auto readStart = steadyNow100ns();
       lostVideo += static_cast<std::int64_t>(modules::readZoomEngineIsoVideoRing(
           videoRing.ptr, videoRing.size, config_.isoRingEpoch, videoNext, config_.slotUuid,
           participantId_.load(), false, arrivals, &evidence));
+      stats.read100ns += steadyNow100ns() - readStart;
+      stats.overwritten += static_cast<std::int64_t>(evidence.overwritten);
+      stats.arrivals += static_cast<std::int64_t>(arrivals.size());
       for (auto& arrival : arrivals) {
         const auto pts = arrival.captured100ns - epoch;
         if (pts < 0) continue;  // captured before the take started
@@ -179,11 +195,16 @@ void IsoSourceRecorder::run() {
         lastW = frame.i420Width;
         lastH = frame.i420Height;
         lastVideo100ns = now;
+        lastVideoQueued100ns = now;
         if (failed) continue;
-        modules::conformI420ToNv12(frame.i420.data(), static_cast<int>(frame.i420Width),
-                                   static_cast<int>(frame.i420Height), config_.writer.width,
-                                   config_.writer.height, nv12);
-        if (!writer.writeVideo(nv12.data(), pts, error)) {
+        const auto conformStart = steadyNow100ns();
+        conform.run(frame.i420.data(), static_cast<int>(frame.i420Width), static_cast<int>(frame.i420Height),
+                    config_.writer.width, config_.writer.height, nv12);
+        const auto writeStart = steadyNow100ns();
+        stats.conform100ns += writeStart - conformStart;
+        const bool wrote = writer.writeVideo(nv12.data(), pts, error);
+        stats.write100ns += steadyNow100ns() - writeStart;
+        if (!wrote) {
           failed = true;
           setWarning("ISO writer stopped writing video: " + error);
         }
@@ -229,9 +250,51 @@ void IsoSourceRecorder::run() {
         realAudio += frames;
       }
     }
+    // ---- keep both tracks moving (the muxer holds one while the other waits)
+    if (!failed) {
+      const auto silence = timeline.catchUp(now - epoch);
+      if (silence > 0) {
+        if (!writer.writeSilence(silence, error)) {
+          failed = true;
+          setWarning("ISO writer stopped writing audio: " + error);
+        }
+        silenceAudio += silence;
+      }
+      // Camera stalled (off, frozen, or never started): repeat the held frame
+      // once a second so the video track advances.
+      if (!failed && now - std::max(lastVideoQueued100ns, epoch) > kHeldRepeat100ns) {
+        if (!writer.repeatHeldVideo(now - epoch, error)) {
+          failed = true;
+          setWarning("ISO writer stopped writing video: " + error);
+        }
+        lastVideoQueued100ns = now;
+      }
+    }
+    const auto end = steadyNow100ns();
+    stats.worstDrain100ns = std::max(stats.worstDrain100ns, end - now);
+    lastDrainEnd = end;
+    if (end - windowStart >= 50'000'000) {
+      const auto ms = [](std::int64_t t) { return static_cast<double>(t) / 10'000.0; };
+      core::nativeLogf("[iso-diag] %s src=%ux%u arrivals=%lld lost=%lld (overwritten=%lld torn=%lld) "
+                       "read=%.0fms conform=%.0fms write=%.0fms worstDrain=%.1fms worstGap=%.1fms backlog=%lld\n",
+                       config_.displayName.c_str(), lastW, lastH, static_cast<long long>(stats.arrivals),
+                       static_cast<long long>(lostVideo - stats.lostAtStart), static_cast<long long>(stats.overwritten),
+                       static_cast<long long>(lostVideo - stats.lostAtStart - stats.overwritten),
+                       ms(stats.read100ns), ms(stats.conform100ns), ms(stats.write100ns),
+                       ms(stats.worstDrain100ns), ms(stats.worstGap100ns),
+                       static_cast<long long>(writer.videoBacklog()));
+      stats = Window{};
+      stats.lostAtStart = lostVideo;
+      windowStart = end;
+    }
     std::lock_guard<std::mutex> lock(healthMutex_);
     health_.videoFrames = writer.videoFrames();
     health_.prerollFrames = writer.prerollFrames();
+    health_.heldRepeats = writer.heldRepeats();
+    health_.videoDropped = writer.videoDropped();
+    health_.encoderBacklogPeak = writer.videoBacklogPeak();
+    health_.cadenceRepeats = writer.cadenceRepeats();
+    health_.cadenceSkipped = writer.cadenceSkipped();
     health_.videoLost = lostVideo;
     health_.audioSamples = realAudio;
     health_.silenceSamples = silenceAudio;
@@ -273,6 +336,11 @@ void IsoSourceRecorder::run() {
   std::lock_guard<std::mutex> lock(healthMutex_);
   health_.videoFrames = writer.videoFrames();
   health_.prerollFrames = writer.prerollFrames();
+  health_.heldRepeats = writer.heldRepeats();
+  health_.videoDropped = writer.videoDropped();
+  health_.encoderBacklogPeak = writer.videoBacklogPeak();
+    health_.cadenceRepeats = writer.cadenceRepeats();
+    health_.cadenceSkipped = writer.cadenceSkipped();
   health_.silenceSamples = writer.audioSamplesWritten() - realAudio;
   health_.bytes = writer.bytesOnDisk();
   if (!finalized) {

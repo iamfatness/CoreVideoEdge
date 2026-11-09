@@ -1,0 +1,185 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CoreVideoEdge.Desktop.ViewModels"
+        xmlns:v="using:CoreVideoEdge.Desktop.Views"
+        xmlns:c="using:CoreVideoEdge.Desktop.Controls"
+        x:Class="CoreVideoEdge.Desktop.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="CoreVideo Edge"
+        Icon="avares://CoreVideoEdge/Assets/CoreVideoEdge.ico"
+        Width="1280" Height="800" MinWidth="960" MinHeight="640"
+        WindowStartupLocation="CenterScreen">
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Ctrl+D1" Command="{Binding SelectScreenCommand}" CommandParameter="Connect" />
+    <KeyBinding Gesture="Ctrl+D2" Command="{Binding SelectScreenCommand}" CommandParameter="Routing" />
+    <KeyBinding Gesture="Ctrl+D3" Command="{Binding SelectScreenCommand}" CommandParameter="Monitor" />
+    <KeyBinding Gesture="Ctrl+D4" Command="{Binding SelectScreenCommand}" CommandParameter="Record" />
+    <KeyBinding Gesture="F5" Command="{Binding RetryCommand}" />
+    <KeyBinding Gesture="Ctrl+R" Command="{Binding RetryCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+R" Command="{Binding Record.PrimaryCommand}" />
+    <KeyBinding Gesture="Escape" Command="{Binding Monitor.CloseTileCommand}" />
+  </Window.KeyBindings>
+
+  <Grid RowDefinitions="48,Auto,*">
+    <!-- ================================================= header -->
+    <Border Grid.Row="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1">
+      <DockPanel Margin="16,0">
+        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,24,0">
+          <c:EdgeMark Width="20" Height="20" Stroke="{StaticResource AccentBrush}" Knockout="{StaticResource PanelBrush}"
+                      Satellite="{Binding MarkTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
+          <TextBlock Text="CoreVideo Edge" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" IsVisible="{Binding WordmarkVisible}" />
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="0">
+          <Button Classes="tab" Classes.active="{Binding IsConnect}" Command="{Binding SelectScreenCommand}" CommandParameter="Connect"
+                  ToolTip.Tip="Ctrl+1">
+            <Grid><TextBlock Text="Connect" VerticalAlignment="Center" />
+              <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsConnect}" /></Grid>
+          </Button>
+          <Button Classes="tab" Classes.active="{Binding IsRouting}" Command="{Binding SelectScreenCommand}" CommandParameter="Routing"
+                  ToolTip.Tip="Ctrl+2">
+            <Grid><TextBlock Text="Routing" VerticalAlignment="Center" />
+              <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsRouting}" /></Grid>
+          </Button>
+          <Button Classes="tab" Classes.active="{Binding IsMonitor}" Command="{Binding SelectScreenCommand}" CommandParameter="Monitor"
+                  ToolTip.Tip="Ctrl+3">
+            <Grid><TextBlock Text="Monitor" VerticalAlignment="Center" />
+              <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsMonitor}" /></Grid>
+          </Button>
+          <Button Classes="tab" Classes.active="{Binding IsRecord}" Command="{Binding SelectScreenCommand}" CommandParameter="Record"
+                  ToolTip.Tip="Ctrl+4">
+            <Grid><TextBlock Text="Record" VerticalAlignment="Center" />
+              <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsRecord}" /></Grid>
+          </Button>
+        </StackPanel>
+
+        <!-- persistent status cluster -->
+        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <TextBlock Classes="mono" Text="{Binding StaleText}" Foreground="{StaticResource Text2Brush}" VerticalAlignment="Center"
+                     IsVisible="{Binding IsStale}" />
+          <Border Classes="tagbox" Background="{StaticResource WarnBrush}" IsVisible="{Binding FakeEngine}"
+                  AutomationProperties.Name="Fake engine: synthetic meeting, not Zoom"
+                  ToolTip.Tip="Started with --fake: a synthetic meeting, not Zoom.">
+            <TextBlock Classes="tag" Text="FAKE ENGINE" Foreground="{StaticResource OnWarnBrush}" />
+          </Border>
+
+          <Border Classes="pill" IsVisible="{Binding MeetingPillVisible}" AutomationProperties.Name="{Binding MeetingPillName}"
+                  AutomationProperties.LiveSetting="Polite" ToolTip.Tip="{Binding MeetingPillName}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{Binding MeetingTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
+              <TextBlock Classes="mono" Text="{Binding MeetingPillText}" VerticalAlignment="Center" />
+              <TextBlock Text="moving rooms" FontSize="12" FontWeight="Medium" Foreground="{StaticResource WarnBrush}" VerticalAlignment="Center"
+                         IsVisible="{Binding State.MovingRooms, FallbackValue=False}" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="pill" IsVisible="{Binding EnginePillVisible}" AutomationProperties.Name="{Binding EnginePillName}"
+                  AutomationProperties.LiveSetting="Polite">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Classes="label" Text="Engine" VerticalAlignment="Center" />
+              <c:Icon Width="14" Height="14" VerticalAlignment="Center"
+                      Data="{Binding EngineTone, Converter={x:Static c:ToneIconConverter.Instance}}"
+                      Foreground="{Binding EngineTone, Converter={x:Static c:ToneBrushConverter.Instance}}"
+                      IsVisible="{Binding EngineTone, Converter={x:Static c:ToneIsConverter.Instance}, ConverterParameter='Warn,Error'}" />
+              <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                       Fill="{Binding EngineTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}"
+                       IsVisible="{Binding !EngineTone, Converter={x:Static c:ToneIsConverter.Instance}, ConverterParameter='Warn,Error'}" />
+              <TextBlock Text="{Binding EngineWord}" FontSize="12" FontWeight="Medium" VerticalAlignment="Center"
+                         Foreground="{Binding EngineTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="pill" IsVisible="{Binding CapVisible}" AutomationProperties.Name="{Binding RoutedName}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Classes="label" Text="Routed" VerticalAlignment="Center" />
+              <TextBlock Classes="mono" Text="{Binding RoutedText}" VerticalAlignment="Center" />
+            </StackPanel>
+          </Border>
+          <Border Classes="pill" IsVisible="{Binding CapVisible}" AutomationProperties.Name="{Binding IsoName}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Classes="label" Text="ISO" VerticalAlignment="Center" />
+              <TextBlock Classes="mono" Text="{Binding IsoText}" VerticalAlignment="Center" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="pill" IsVisible="{Binding DiskPillVisible}" AutomationProperties.Name="{Binding DiskName}" ToolTip.Tip="{Binding DiskName}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:Icon Width="14" Height="14" VerticalAlignment="Center" Data="{StaticResource IconDisk}"
+                      Foreground="{Binding DiskTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+              <TextBlock Classes="mono" Text="{Binding DiskText}" VerticalAlignment="Center"
+                         Foreground="{Binding DiskTone, Converter={x:Static c:ToneBrushConverter.Instance}}" />
+            </StackPanel>
+          </Border>
+
+          <!-- REC tally: red fill + mono timer, only while actually recording. Solid, never blinking. -->
+          <Border Classes="pill" Background="{StaticResource RecBrush}" IsVisible="{Binding RecVisible}"
+                  AutomationProperties.Name="{Binding RecName}" AutomationProperties.LiveSetting="Assertive">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Classes="tag" Text="REC" Foreground="{StaticResource OnRecBrush}" VerticalAlignment="Center" />
+              <TextBlock Classes="mono" Text="{Binding RecTimer}" Foreground="{StaticResource OnRecBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- ================================================= failure banner -->
+    <Border Grid.Row="1" IsVisible="{Binding BannerVisible}" Background="{StaticResource ErrorTintBrush}"
+            BorderBrush="{StaticResource ErrorTextBrush}" BorderThickness="0,1,0,1" Padding="16,10"
+            AutomationProperties.Name="{Binding BannerName}" AutomationProperties.LiveSetting="Assertive">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+        <c:Icon Grid.Column="0" Width="20" Height="20" Margin="0,0,12,0" VerticalAlignment="Top"
+                Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}" />
+        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Banner.Problem, FallbackValue=''}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding Banner.Recovery, FallbackValue=''}" Classes="secondary" TextWrapping="Wrap" />
+        </StackPanel>
+        <TextBlock Grid.Column="2" Classes="label" Text="{Binding BannerMore}" VerticalAlignment="Center" Margin="12,0" />
+        <Button Grid.Column="3" Classes="ghost" VerticalAlignment="Center"
+                Content="{Binding Banner.ActionText, FallbackValue=''}" Command="{Binding Banner.Action, FallbackValue={x:Null}}"
+                IsVisible="{Binding Banner.ActionText, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}" />
+      </Grid>
+    </Border>
+
+    <!-- ================================================= screens -->
+    <Grid Grid.Row="2">
+      <!-- node lost: values are removed, the reason is shown (the banner carries the recovery) -->
+      <StackPanel IsVisible="{Binding !ScreensVisible}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" MaxWidth="480">
+        <c:Icon Width="20" Height="20" HorizontalAlignment="Center" Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}" />
+        <TextBlock Classes="section" Text="No values from the Edge node" HorizontalAlignment="Center" />
+        <TextBlock Classes="secondary" Text="{Binding LostText}" TextWrapping="Wrap" TextAlignment="Center" />
+      </StackPanel>
+      <Grid IsVisible="{Binding ScreensVisible}">
+      <v:ConnectView DataContext="{Binding Connect}" IsVisible="{Binding $parent[Window].((vm:MainViewModel)DataContext).IsConnect}" />
+      <v:RoutingView DataContext="{Binding Routing}" IsVisible="{Binding $parent[Window].((vm:MainViewModel)DataContext).IsRouting}" />
+      <v:MonitorView DataContext="{Binding Monitor}" IsVisible="{Binding $parent[Window].((vm:MainViewModel)DataContext).IsMonitor}" />
+      <v:RecordView DataContext="{Binding Record}" IsVisible="{Binding $parent[Window].((vm:MainViewModel)DataContext).IsRecord}" />
+      </Grid>
+
+      <!-- toast: completed, non-critical events only; never takes focus -->
+      <Border IsVisible="{Binding ToastVisible}" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="16"
+              Background="{StaticResource RaisedBrush}" CornerRadius="8" Padding="14,10" BoxShadow="0 8 24 0 #8C000000"
+              AutomationProperties.LiveSetting="Polite" AutomationProperties.Name="{Binding Toast}" Focusable="False">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <c:Icon Data="{StaticResource IconCheckCircle}" Foreground="{StaticResource LiveBrush}" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding Toast}" VerticalAlignment="Center" />
+        </StackPanel>
+      </Border>
+
+      <!-- close while recording: confirm (destructive) -->
+      <Border x:Name="CloseConfirm" IsVisible="False" Background="#99000000">
+        <Border Background="{StaticResource RaisedBrush}" CornerRadius="8" Padding="24" MaxWidth="480"
+                HorizontalAlignment="Center" VerticalAlignment="Center" BoxShadow="0 8 24 0 #8C000000">
+          <StackPanel Spacing="16">
+            <TextBlock Classes="section" Text="A take is recording" />
+            <TextBlock TextWrapping="Wrap" Text="Closing stops it and finalizes every ISO file first." Classes="secondary" />
+            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+              <Button x:Name="KeepRecordingButton" Classes="ghost" Content="Keep recording" />
+              <Button x:Name="StopAndCloseButton" Classes="rec" Content="Stop and close" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

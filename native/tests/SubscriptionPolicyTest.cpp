@@ -20,16 +20,35 @@ TEST(SubscriptionPolicy, NothingIsSubscribedUnlessAsked) {
   EXPECT_TRUE(book.selections().empty());
 }
 
-TEST(SubscriptionPolicy, DefaultCapIsSixAndIsEnforced) {
+TEST(SubscriptionPolicy, DefaultCapIsEightAndIsEnforced) {
   SubscriptionBook book;
-  EXPECT_EQ(book.cap(), 6);
-  const auto people = roster(7);
+  EXPECT_EQ(book.cap(), 8);
+  const auto people = roster(9);
   std::vector<SubscriptionAction> actions;
-  for (int i = 0; i < 6; ++i) EXPECT_EQ(book.request(people[i], true, actions), std::string());
-  const auto refusal = book.request(people[6], true, actions);
+  for (int i = 0; i < 8; ++i) EXPECT_EQ(book.request(people[i], true, actions), std::string());
+  const auto refusal = book.request(people[8], true, actions);
   EXPECT_FALSE(refusal.empty());
-  EXPECT_EQ(book.selections().size(), size_t{6});
-  EXPECT_EQ(actions.size(), size_t{6});
+  EXPECT_EQ(book.selections().size(), size_t{8});
+  EXPECT_EQ(actions.size(), size_t{8});
+}
+
+// Breakout move: the node's new room lists nobody it routed; coming back,
+// guests reappear with the SAME Zoom id and must be routed again (the engine
+// dropped every subscription in the move).
+TEST(SubscriptionPolicy, AGuestBackWithTheSameIdIsPresentAndResubscribed) {
+  SubscriptionBook book;
+  std::vector<SubscriptionAction> actions;
+  const auto people = roster(3);
+  book.request(people[0], true, actions);
+  book.request(people[1], true, actions);
+  actions.clear();
+  book.applyRoster({}, actions);  // moved: nobody routed is here
+  EXPECT_TRUE(actions.empty());
+  EXPECT_FALSE(book.selections()[0].present);
+  book.applyRoster(people, actions);  // back
+  EXPECT_EQ(actions.size(), size_t{2});
+  EXPECT_TRUE(book.selections()[0].present && book.selections()[1].present);
+  EXPECT_EQ(book.selections()[0].slot, 1);
 }
 
 TEST(SubscriptionPolicy, CapCannotExceedTheEngineIsoTable) {

@@ -1,0 +1,53 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CoreVideoEdge.Desktop.ViewModels"
+             xmlns:c="using:CoreVideoEdge.Desktop.Controls"
+             x:Class="CoreVideoEdge.Desktop.Views.FeedsView"
+             x:DataType="vm:FeedsViewModel">
+  <!-- Send to Pro: live feeds of every routed slot over NDI or SRT. The node's refusal text is shown verbatim at the fields. -->
+  <StackPanel Spacing="8">
+    <TextBlock Classes="section" Text="Send to Pro" />
+    <Border Classes="segtrack" HorizontalAlignment="Left" AutomationProperties.Name="Send to Pro mode">
+      <StackPanel Orientation="Horizontal" Spacing="2">
+        <Button Classes="segment" Classes.active="{Binding IsOff}" Content="Off" Command="{Binding SelectOffCommand}" />
+        <Button Classes="segment" Classes.active="{Binding IsNdi}" Content="NDI" Command="{Binding SelectNdiCommand}" />
+        <Button Classes="segment" Classes.active="{Binding IsSrt}" Content="SRT" Command="{Binding SelectSrtCommand}" />
+      </StackPanel>
+    </Border>
+    <StackPanel Orientation="Horizontal" Spacing="6">
+      <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+               Fill="{Binding SummaryTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
+      <TextBlock Text="{Binding Summary}" Classes="secondary" TextWrapping="Wrap" MaxWidth="270" FontSize="12" LineHeight="16" />
+    </StackPanel>
+    <StackPanel Spacing="6" IsVisible="{Binding IsSrt}">
+      <TextBlock Classes="label" Text="Pro address" />
+      <TextBox Text="{Binding Host}" AutomationProperties.Name="Pro address" />
+      <Grid ColumnDefinitions="*,8,*">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="label" Text="Base port" />
+          <TextBox Text="{Binding Port}" FontFamily="{StaticResource MonoFont}" AutomationProperties.Name="Base port" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Spacing="6">
+          <TextBlock Classes="label" Text="Latency (ms)" />
+          <TextBox Text="{Binding Latency}" FontFamily="{StaticResource MonoFont}" AutomationProperties.Name="Latency in milliseconds" />
+        </StackPanel>
+      </Grid>
+      <TextBlock Classes="label" Text="{Binding PortsNote}" TextWrapping="Wrap" />
+      <TextBlock Classes="label" Text="Passphrase" />
+      <TextBox Text="{Binding Passphrase}" PasswordChar="&#x2022;" AutomationProperties.Name="SRT passphrase" />
+      <TextBlock Classes="label" Text="{Binding PassphraseNote}" TextWrapping="Wrap" />
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button Classes="primary" MinHeight="36" Content="{Binding ApplySrtText}" Command="{Binding ApplySrtCommand}" />
+        <Button Classes="link" Content="Remove passphrase" Command="{Binding ClearPassphraseCommand}" IsVisible="{Binding PassphraseSet}" />
+      </StackPanel>
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding ErrorVisible}">
+      <c:Icon Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+      <TextBlock Classes="error" Text="{Binding Error}" TextWrapping="Wrap" MaxWidth="262" />
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding FirstErrorVisible}">
+      <c:Icon Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource ErrorTextBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+      <TextBlock Classes="error" Text="{Binding FirstError}" TextWrapping="Wrap" MaxWidth="262" />
+    </StackPanel>
+  </StackPanel>
+</UserControl>

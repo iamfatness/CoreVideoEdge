@@ -60,3 +60,43 @@ TEST(IsoAudioTimeline, NeverRewindsAndPadsToTheTakeEnd) {
   EXPECT_EQ(t.padTo(96000), std::int64_t{96000 - 48480});
   EXPECT_EQ(t.padTo(10), std::int64_t{0});
 }
+
+// Live 2026-11-09: a guest who never speaks sends no packets; without catch-up
+// the stem never advanced and the MP4 muxer held every video frame (50 GB).
+TEST(IsoAudioTimeline, ASilentGuestsStemKeepsUpWithRealTime) {
+  IsoAudioTimeline t(48000);
+  std::int64_t silence = 0;
+  for (std::int64_t ms = 5; ms <= 60'000; ms += 5) silence += t.catchUp(ms * kMs);
+  // Within holdback (200 ms) + tolerance (40 ms) of real time, never ahead of it.
+  EXPECT_TRUE(silence >= 48 * (60'000 - 240));
+  EXPECT_TRUE(silence <= 48 * (60'000 - 200));
+  EXPECT_EQ(t.writtenFrames(), silence);
+}
+
+TEST(IsoAudioTimeline, CatchUpWritesChunksNotSlivers) {
+  IsoAudioTimeline t(48000);
+  EXPECT_EQ(t.catchUp(230 * kMs), std::int64_t{0});  // 30 ms past the holdback: under tolerance
+  EXPECT_EQ(t.catchUp(260 * kMs), std::int64_t{48 * 60});
+}
+
+TEST(IsoAudioTimeline, CatchUpAddsNoSilenceInsideContinuousSpeech) {
+  IsoAudioTimeline t(48000);
+  std::int64_t silence = 0, produced = 0, now = 0;
+  const int jitter[] = {5, 20, 35, 10, 0, 25};
+  for (int i = 0; produced < 48000 * 60; ++i) {
+    const std::int64_t batchMs = 10 + jitter[i % 6];
+    now += batchMs * kMs;
+    silence += t.place(now, 48 * batchMs).silenceFrames;
+    silence += t.catchUp(now + 3 * kMs);  // the poll after a batch, before the next one
+    produced += 48 * batchMs;
+  }
+  EXPECT_EQ(silence, std::int64_t{0});
+}
+
+TEST(IsoAudioTimeline, APacketLateWithinTheHoldbackIsStillPlacedExactly) {
+  IsoAudioTimeline t(48000);
+  (void)t.catchUp(2000 * kMs);  // silent until 2 s: stem filled to 1.8 s
+  // A word that began at 1.85 s, read at 1.86 s + 100 ms delivery delay.
+  const auto p = t.place(1960 * kMs, 480 * 1);  // ends at 1.96 s read time
+  EXPECT_EQ(p.startFrame, std::int64_t{48 * 1950});
+}
