@@ -12,6 +12,7 @@
 #include "edge/EdgeConfig.h"
 #include "edge/EngineSupervisor.h"
 #include "edge/IsoSession.h"
+#include "edge/FeedSender.h"
 #include "edge/PreviewPublisher.h"
 #include "edge/SubscriptionPolicy.h"
 #include "rpc/Json.h"
@@ -74,6 +75,7 @@ class EdgeController {
   std::string cmdRecordStop();
   std::string cmdEngine(const rpc::Json& c);
   std::string cmdRecordFormat(const rpc::Json& c);
+  std::string cmdSetFeeds(const rpc::Json& c);
   void resubscribeAll();
 
   void fail(const std::string& message);
@@ -133,6 +135,7 @@ class EdgeController {
 
   IsoSession session_;
   PreviewPublisher preview_;
+  FeedSender feeds_;
   std::uint32_t isoRingEpoch_ = 0;
   std::string recordingWarning_;
   std::string lastTakeDir_;

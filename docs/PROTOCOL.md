@@ -30,6 +30,7 @@ Every command may carry an `"id"`; the reply echoes it:
 | `record-start` | | Refused (with the reason) for: no folder, uncreatable/unwritable folder, under 10 minutes of disk for this load, no ISO sources, a selected ISO guest who has left. All files open or none do. |
 | `record-stop` | | Finalizes every file in parallel, rewrites `manifest.json`. |
 | `engine` | `on` (default true) | Engine On: `true` asks Zoom for raw media (and asks the host for record permission when this account lacks it); `false` releases it. Refused off while recording. Applies when next in a meeting if sent before joining. The routing is re-sent automatically when raw media returns. |
+| `set-feeds` | `mode` (`off`/`ndi`/`srt`), `srtHost`, `srtBasePort` (10000), `srtLatencyMs` (120), `srtPassphrase` | Live feeds of every routed slot to CoreVideo Pro. NDI source `CoreVideo Edge <node> S<n>`; SRT caller to `srtHost:srtBasePort+n-1` (Pro's SRT input listeners). The passphrase is never logged or published. Refused with the reason when the NDI runtime or FFmpeg is missing. |
 | `set-record-format` | `height` (1080 or 720), `fps` (0 = as Zoom delivers, 30, 60) | 16:9 at that height. Constant 30/60 snaps every frame to the grid; repeats and skips are counted. Not while recording. |
 | `state` | | Publish a state line now. |
 | `quit` | | Stops any take, leaves, exits. End of stdin does the same. |
@@ -105,6 +106,20 @@ estimated or defaulted for display.
   over the last ~100 ms, dBFS (absent until any audio has been measured).
 - `recording.streams[]`: `cadenceRepeats`, `cadenceSkipped` (constant-rate
   formats only).
+
+## Feeds state
+
+`feeds: { "mode": "off|ndi|srt", "srtHost", "srtBasePort", "srtLatencyMs",
+"srtEncrypted": bool, "slots": [ { "slot", "target" (NDI name or SRT URL with
+the passphrase redacted), "state": "starting|waiting|sending|failed",
+"framesSent", "framesSkipped" (delivered by Zoom, superseded before they could
+be sent), "audioSeconds", "receivers" (NDI: connected receivers, measured by
+the sender), "connected" (SRT: Pro's listener reached), "error" } ] }`.
+
+SRT feeds are 1920x1080 H.264 (NVENC, else x264) at a constant 30 fps plus
+AAC 48 kHz stereo in MPEG-TS, studio range. NDI feeds pass the source size and
+rate through as I420 (studio range) with planar float audio, plus per-frame
+metadata `<corevideo_edge guest="..." zoom_id="..."/>`.
 
 ## Preview frames (for the Monitor)
 

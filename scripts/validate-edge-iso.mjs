@@ -42,6 +42,7 @@ const silent = Number(args.silent ?? 0);
 const roomMove = fake && args['room-move'] === 'true';  // fake: a breakout move mid-take and back
 const roomStayMs = 4000;
 const roomMoveAtMs = 6000 + Math.round(seconds * 400);  // after join; lands inside the take
+const feeds = args.feeds ? String(args.feeds) : '';  // ndi | srt: live feeds to Pro, verified by a receiver
 const format = args.format ? String(args.format) : '';  // e.g. 720 or 720/30 or 1080/60
 const formatHeight = format ? Number(format.split('/')[0]) : 1080;
 const formatFps = format && format.includes('/') ? Number(format.split('/')[1]) : 0;  // fake: the first N roster guests never send audio
@@ -49,6 +50,8 @@ const names = args.names ? args.names.split(',').map((s) => s.trim()).filter(Boo
 
 let silentIds = new Set();
 let sawMovingRooms = false;
+let allStateText = '';
+const srtSecret = 'edge-validator-secret';
 const failures = [];
 const check = (ok, what) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}`);
@@ -104,7 +107,7 @@ child.stdout.on('data', (chunk) => {
     if (!line) continue;
     let message;
     try { message = JSON.parse(line); } catch { console.error('unparseable stdout line:', line); continue; }
-    if (message.type === 'state') { state = message; if (message.movingRooms) sawMovingRooms = true; }
+    if (message.type === 'state') { allStateText += line; state = message; if (message.movingRooms) sawMovingRooms = true; }
     else if (message.type === 'result' && message.id && pending.has(message.id)) {
       pending.get(message.id)(message);
       pending.delete(message.id);
@@ -274,6 +277,7 @@ async function main() {
     const f = await send('set-record-format', { height: formatHeight, fps: formatFps });
     check(f.ok, `record format ${formatHeight}p ${formatFps ? formatFps + ' fps constant' : 'as delivered'}${f.ok ? '' : ': ' + f.error}`);
   }
+  if (feeds) await checkFeeds(pickIds);
   const folder = await send('set-record-folder', { path: outDir });
   check(folder.ok, `record folder set to ${outDir}`);
   const start = await send('record-start');
@@ -387,6 +391,53 @@ async function main() {
       check(spread <= 40, `the same clap lands at the same time in every ISO (spread ${spread.toFixed(1)} ms)`);
     }
   }
+}
+
+// Live feeds: NDI is received by the probe (as Pro's NDI input would); SRT by
+// FFmpeg listening on Pro's ports and recording (exactly Pro's role).
+async function checkFeeds(pickIds) {
+  const routed = state.participants.filter((p) => pickIds.has(p.id));
+  if (feeds === 'ndi') {
+    const r = await send('set-feeds', { mode: 'ndi' });
+    if (!check(r.ok, `feeds: NDI on${r.ok ? '' : ': ' + r.error}`)) return;
+    await waitFor((s) => s.feeds?.slots?.length === routed.length && s.feeds.slots.every((f) => f.state === 'sending'), 15000, 'every feed sending');
+    for (const p of routed.slice(0, 2)) {
+      const f = state.feeds.slots.find((x) => x.slot === p.slot);
+      const probe = spawnSync(join(bin, 'corevideo-edge-ndi-probe.exe'), ['--name', f.target, '--seconds', '6'], { encoding: 'utf8', timeout: 60000 });
+      let m = {};
+      try { m = JSON.parse(probe.stdout.trim().split(/\r?\n/).pop()); } catch { m = { ok: false, error: probe.stdout + probe.stderr }; }
+      check(m.ok && m.width === 1920 && m.height === 1080 && m.fps >= fps * 0.85 && m.audioRate === 48000 && m.audioChannels === 2 && m.audioSeconds > 4 && m.metadata,
+        `NDI ${f.target}: received ${m.width}x${m.height} at ${m.fps} fps, audio ${m.audioRate} Hz x${m.audioChannels} ${m.audioSeconds} s (peak ${m.audioPeakDb} dB), guest metadata ${m.metadata}${m.error ? ' ' + m.error : ''}`);
+    }
+    await sleep(500);
+    const after = state.feeds.slots.find((x) => x.slot === routed[0].slot);
+    check(after && typeof after.receivers === 'number', `NDI receivers measured by the sender (${after?.receivers})`);
+  } else if (feeds === 'srt') {
+    const listeners = routed.slice(0, 2).map((p) => {
+      const port = 20000 + p.slot - 1;
+      const file = join(outDir, `srt-slot-${p.slot}.ts`);
+      const proc = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', `srt://127.0.0.1:${port}?mode=listener&latency=120000&passphrase=${srtSecret}&pbkeylen=16`, '-c', 'copy', '-t', '8', file]);
+      return { p, port, file, proc };
+    });
+    await sleep(1000);
+    const r = await send('set-feeds', { mode: 'srt', srtHost: '127.0.0.1', srtBasePort: 20000, srtLatencyMs: 120, srtPassphrase: srtSecret });
+    if (!check(r.ok, `feeds: SRT on${r.ok ? '' : ': ' + r.error}`)) return;
+    await Promise.all(listeners.map((l) => new Promise((res) => { l.proc.on('exit', res); setTimeout(res, 30000); })));
+    for (const l of listeners) {
+      const probe = existsSync(l.file) ? ffprobe(l.file) : null;
+      const v = probe?.streams.find((s) => s.codec_type === 'video');
+      const a = probe?.streams.find((s) => s.codec_type === 'audio');
+      const d = Number(probe?.format?.duration ?? 0);
+      check(v?.codec_name === 'h264' && v.width === 1920 && v.height === 1080 && a?.codec_name === 'aac' && Number(a.sample_rate) === 48000 && d > 6,
+        `SRT slot ${l.p.slot} -> 127.0.0.1:${l.port}: ${v?.codec_name} ${v?.width}x${v?.height} + ${a?.codec_name} ${a?.sample_rate} Hz, ${d.toFixed(1)} s`);
+    }
+    check(state.feeds.srtEncrypted === true && !allStateText.includes(srtSecret) && !logLines.join('').includes(srtSecret),
+      'SRT passphrase used (encrypted) but never in any state line or the node log');
+    const f = state.feeds.slots.find((x) => x.slot === routed[2]?.slot);
+    if (f) check(f.state === 'failed' && /not listening/.test(f.error ?? ''), `a slot with no listener says so: "${f.error}"`);
+  }
+  const off = await send('set-feeds', { mode: 'off' });
+  check(off.ok && (await waitFor((s) => s.feeds?.mode === 'off' && s.feeds.slots.length === 0, 10000, 'feeds off')), 'feeds: off stops every feed');
 }
 
 try {

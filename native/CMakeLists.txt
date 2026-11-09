@@ -43,6 +43,9 @@ add_library(edge_core STATIC
   src/edge/IsoSession.cpp
   src/edge/EdgeConfig.cpp
   src/edge/PreviewPublisher.cpp
+  src/edge/NdiRuntime.cpp
+  src/edge/FeedSender.cpp
+  src/edge/SrtFeedSink.cpp
 )
 target_include_directories(edge_core PUBLIC src)
 target_link_libraries(edge_core PUBLIC edge_lifted mfplat mfreadwrite mfuuid mf ole32)
@@ -50,6 +53,10 @@ target_compile_definitions(edge_core PUBLIC EDGE_VERSION="${PROJECT_VERSION}")
 
 add_executable(corevideo-edge src/edge/main.cpp)
 target_link_libraries(corevideo-edge PRIVATE edge_core)
+
+# Verification probe for Edge's NDI feeds (loads the NDI runtime at run time).
+add_executable(corevideo-edge-ndi-probe tools/ndi-probe.cpp)
+target_link_libraries(corevideo-edge-ndi-probe PRIVATE edge_core)
 
 # ---------------------------------------------------------------------------
 # Vendored Zoom engine (native/zoom-engine, see its README for provenance).
@@ -102,6 +109,7 @@ add_executable(corevideo-edge-tests
   tests/EdgeConfigTest.cpp
   tests/FastConformTest.cpp
   tests/PreviewPublisherTest.cpp
+  tests/FeedTargetsTest.cpp
 )
 target_include_directories(corevideo-edge-tests PRIVATE src tests)
 target_link_libraries(corevideo-edge-tests PRIVATE edge_core)

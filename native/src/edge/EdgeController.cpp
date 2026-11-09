@@ -68,6 +68,7 @@ EdgeController::EdgeController(EdgeOptions options, Output output)
 EdgeController::~EdgeController() {
   if (session_.active()) session_.stop();
   preview_.stop();
+  feeds_.stopAll();
   engine_.stop();
 }
 
@@ -155,6 +156,8 @@ void EdgeController::handleCommand(const std::string& line) {
     else filePrefix_ = trimCopy(c.getString("prefix")).empty() ? "edge" : trimCopy(c.getString("prefix"));
   } else if (cmd == "engine") {
     error = cmdEngine(c);
+  } else if (cmd == "set-feeds") {
+    error = cmdSetFeeds(c);
   } else if (cmd == "set-record-format") {
     error = cmdRecordFormat(c);
   } else if (cmd == "record-start") {
@@ -423,6 +426,17 @@ std::string EdgeController::cmdEngine(const Json& c) {
   return {};
 }
 
+std::string EdgeController::cmdSetFeeds(const Json& c) {
+  FeedMode mode = feeds_.mode();
+  if (c.get("mode") && !parseFeedMode(c.getString("mode"), mode)) return "Feed mode must be off, ndi or srt.";
+  SrtSettings srt = feeds_.srt();
+  if (c.get("srtHost")) srt.host = trimCopy(c.getString("srtHost"));
+  if (c.get("srtBasePort")) srt.basePort = static_cast<int>(c.getNumber("srtBasePort"));
+  if (c.get("srtLatencyMs")) srt.latencyMs = static_cast<int>(c.getNumber("srtLatencyMs"));
+  if (c.get("srtPassphrase")) srt.passphrase = c.getString("srtPassphrase");  // never logged, never in state
+  return feeds_.configure(mode, srt, displayName_);
+}
+
 std::string EdgeController::cmdRecordFormat(const Json& c) {
   if (session_.active()) return "Stop recording before changing the record format.";
   const int height = static_cast<int>(c.getNumber("height", recordHeight_));
@@ -598,6 +612,13 @@ void EdgeController::tick() {
     for (const auto& s : book_.selections()) previewSlots.push_back({s.slot, slotSourceUuid(s.slot), s.participantId});
   }
   preview_.setSlots(engine_.shmPrefix(), std::move(previewSlots));
+  // Live feeds to Pro follow the routing too (only while a mode is on).
+  std::vector<FeedSlotSpec> feedSlots;
+  if (phase_ == Phase::InMeeting && engine_.running()) {
+    for (const auto& s : book_.selections())
+      feedSlots.push_back({s.slot, slotSourceUuid(s.slot), s.participantId, s.displayName});
+  }
+  feeds_.setSlots(engine_.shmPrefix(), std::move(feedSlots));
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +647,29 @@ Json EdgeController::buildState() const {
       {"filePrefix", filePrefix_},
   };
   state.emplace("engineOn", engineOn_);
+  {
+    const auto srt = feeds_.srt();
+    Json::Object feeds{{"mode", feedModeName(feeds_.mode())}};
+    if (!srt.host.empty()) {
+      feeds.emplace("srtHost", srt.host);
+      feeds.emplace("srtBasePort", static_cast<double>(srt.basePort));
+      feeds.emplace("srtLatencyMs", static_cast<double>(srt.latencyMs));
+      feeds.emplace("srtEncrypted", !srt.passphrase.empty());
+    }
+    Json::Array slots;
+    for (const auto& h : feeds_.health()) {
+      Json::Object row{{"slot", h.slot}, {"target", h.target}, {"state", h.state},
+                       {"framesSent", static_cast<double>(h.framesSent)},
+                       {"framesSkipped", static_cast<double>(h.framesSkipped)},
+                       {"audioSeconds", static_cast<double>(h.audioSeconds)}};
+      if (h.receivers >= 0) row.emplace("receivers", h.receivers);
+      if (feeds_.mode() == FeedMode::Srt) row.emplace("connected", h.connected);
+      if (!h.error.empty()) row.emplace("error", h.error);
+      slots.emplace_back(std::move(row));
+    }
+    feeds.emplace("slots", Json(std::move(slots)));
+    state.emplace("feeds", Json(std::move(feeds)));
+  }
   if (movingRooms_) state.emplace("movingRooms", true);
   state.emplace("recordFormat", Json(Json::Object{{"width", static_cast<double>(recordHeight_ * 16 / 9)},
                                                   {"height", static_cast<double>(recordHeight_)},
