@@ -29,6 +29,8 @@ Every command may carry an `"id"`; the reply echoes it:
 | `set-file-prefix` | `prefix` | Not while recording. |
 | `record-start` | | Refused (with the reason) for: no folder, uncreatable/unwritable folder, under 10 minutes of disk for this load, no ISO sources, a selected ISO guest who has left. All files open or none do. |
 | `record-stop` | | Finalizes every file in parallel, rewrites `manifest.json`. |
+| `engine` | `on` (default true) | Engine On: `true` asks Zoom for raw media (and asks the host for record permission when this account lacks it); `false` releases it. Refused off while recording. Applies when next in a meeting if sent before joining. The routing is re-sent automatically when raw media returns. |
+| `set-record-format` | `height` (1080 or 720), `fps` (0 = as Zoom delivers, 30, 60) | 16:9 at that height. Constant 30/60 snaps every frame to the grid; repeats and skips are counted. Not while recording. |
 | `state` | | Publish a state line now. |
 | `quit` | | Stops any take, leaves, exits. End of stdin does the same. |
 
@@ -87,6 +89,54 @@ estimated or defaulted for display.
   frames and are not in `videoFrames`.
 - After `record-stop`, `recording.streams` keeps the finished take's final
   health until the next take starts.
+
+## New state fields (v2)
+
+- `engineOn` (bool): the operator's Engine On choice. `rawMedia.active` is what
+  the engine reports; the two differ while the host has not granted yet.
+- `movingRooms: true` while Zoom is moving this node between breakout rooms (or
+  reconnecting). The take, the engine and the routing slots are kept; guests
+  re-attach when the new room's roster arrives.
+- `recordFormat`: `{ "width": 1920, "height": 1080, "fps": 0 }`.
+- `previewDir`: folder holding one preview file per routed slot (below).
+- `participants[].received.fps`: frames per second measured over the last
+  second from the preview reader (absent until measured).
+- `participants[].received.audioDb`: peak level of that guest's isolated audio
+  over the last ~100 ms, dBFS (absent until any audio has been measured).
+- `recording.streams[]`: `cadenceRepeats`, `cadenceSkipped` (constant-rate
+  formats only).
+
+## Preview frames (for the Monitor)
+
+The node publishes a small live picture of every routed slot so the operator
+app can draw the Monitor without touching Zoom or the engine. One file per
+slot, memory-mapped, portable (Windows file mapping / POSIX `mmap`):
+
+`<previewDir>/slot-<N>.cvp` (N = 1..8), created when the slot is routed,
+deleted when it is unrouted. Little-endian, fixed size:
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | char[4] | magic `CVEP` |
+| 4 | u32 | version = 1 |
+| 8 | u32 | `seq`: odd while the node is writing; read when even and unchanged across the read |
+| 12 | u32 | width (480) |
+| 16 | u32 | height (270) |
+| 20 | u32 | stride in bytes (width x 4) |
+| 24 | u32 | source width (what Zoom delivered; 0 until the first frame) |
+| 28 | u32 | source height |
+| 32 | u32 | frames received since the slot was routed |
+| 36 | i32 | measured fps x 100 over the last second (-1 until measured) |
+| 40 | i32 | audio peak dBFS x 100 over the last ~100 ms (INT32_MIN until any audio) |
+| 44 | u32 | participant id currently bound to the slot |
+| 48 | i64 | node steady clock ms when this header was last written (heartbeat, ~15 Hz) |
+| 56 | i64 | node steady clock ms of the last NEW frame (0 = none yet) |
+| 64 | u8[stride x height] | picture, BGRA8 premultiplied (A = 255), letterboxed into 16:9 with black |
+
+The app shows a frame only after the first frame arrived (`frames > 0`), and
+computes "last frame N s ago" as `heartbeat - lastFrame`. If the heartbeat
+itself stops advancing for > 2 s, the node is not publishing and the tile says
+so. Nothing in this file is estimated.
 
 ## Engine side
 
