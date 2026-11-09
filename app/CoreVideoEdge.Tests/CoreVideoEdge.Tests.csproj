@@ -18,6 +18,15 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CoreVideoEdge.Core\CoreVideoEdge.Core.csproj" />
+    <!-- View-model tests (what JSON each operator action sends). -->
+    <ProjectReference Include="..\CoreVideoEdge.Desktop\CoreVideoEdge.Desktop.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The token dictionary the app ships, contrast-checked pair by pair. -->
+    <None Include="..\CoreVideoEdge.Desktop\Theme\Tokens.axaml" Link="Fixtures\Tokens.axaml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\screenshots\fixtures\state-in-meeting.json" Link="Fixtures\state-in-meeting.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\screenshots\fixtures\state-recording.json" Link="Fixtures\state-recording.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
