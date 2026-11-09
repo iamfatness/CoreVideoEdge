@@ -1,0 +1,154 @@
+name: macOS
+
+# The Mac build of CoreVideo Edge. There is no local Mac: every Mac compile,
+# test and package happens here (Apple Silicon runners). Hands-on QA happens on
+# the owner's Mac with the bundle this workflow stores in the private draft
+# release.
+#
+# The Zoom macOS SDK is license-restricted. It lives ONLY as an asset on the
+# DRAFT release "SDK assets (private storage - DO NOT PUBLISH)" (drafts are not
+# public; a read-only token cannot even see them, hence contents: write). It
+# never goes into git, an Actions artifact (public repo: anyone signed in can
+# download artifacts), a cache, or a log. Bundles that contain the SDK are
+# uploaded back to that same draft release, never as artifacts.
+
+on:
+  push:
+    branches: [main, 'mac-*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SDK_RELEASE_NAME: SDK assets (private storage - DO NOT PUBLISH)
+  SDK_ASSET: zoom-sdk-macos-7.1.5.84750.zip
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+jobs:
+  native:
+    name: Node, fake engine, tests, validator
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: brew install ninja ffmpeg || true
+      - name: Configure
+        run: cmake -S native -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/mac
+      - name: Native tests
+        run: build/mac/corevideo-edge-tests
+      - name: Validator (fake engine, control API only)
+        run: |
+          set -e
+          node scripts/validate-edge-iso.mjs --sources 6 --seconds 30
+          node scripts/validate-edge-iso.mjs --sources 6 --seconds 30 --silent 3
+          node scripts/validate-edge-iso.mjs --sources 6 --seconds 30 --room-move
+          node scripts/validate-edge-iso.mjs --sources 4 --seconds 15 --format 720/30 --fps 60
+          node scripts/validate-edge-iso.mjs --sources 3 --seconds 10 --feeds srt
+      - name: Keep failed takes for diagnosis (no SDK content)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-native-diagnostics
+          path: |
+            build/mac/*.log
+            validate-out/**
+          if-no-files-found: ignore
+
+  engine:
+    name: Real Zoom engine (ZoomSDK.framework)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: brew install ninja || true
+      - name: Fetch the Zoom macOS SDK from the private draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset_url=$(gh api "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq ".[] | select(.draft and .name == \"${SDK_RELEASE_NAME}\") | .assets[] | select(.name == \"${SDK_ASSET}\") | .url")
+          if [ -z "$asset_url" ]; then
+            echo "::error::Zoom macOS SDK asset not found on the draft release; the real engine cannot be built."
+            exit 1
+          fi
+          gh api -H "Accept: application/octet-stream" "$asset_url" > "$RUNNER_TEMP/zoom-sdk.zip"
+          unzip -q "$RUNNER_TEMP/zoom-sdk.zip" -d "$RUNNER_TEMP/zoom-sdk"
+          sdk=$(find "$RUNNER_TEMP/zoom-sdk" -maxdepth 3 -type d -name ZoomSDK.framework -print -quit)
+          echo "ZOOM_SDK_DIR=$(dirname "$sdk")" >> "$GITHUB_ENV"
+      - name: Configure
+        run: cmake -S native -B build/engine -G Ninja -DCMAKE_BUILD_TYPE=Release -DEDGE_BUILD_ZOOM_ENGINE=ON -DZOOM_SDK_DIR="$ZOOM_SDK_DIR"
+      - name: Build
+        run: cmake --build build/engine --target corevideo-zoom-engine corevideo-edge
+      - name: Engine bundle
+        run: scripts/make-macos-engine-bundle.sh --build-dir build/engine --zoom-sdk "$ZOOM_SDK_DIR"
+      - name: Bundle self-check (SDK runtime in Contents/Frameworks)
+        run: |
+          set -e
+          app=build/engine/corevideo-zoom-engine.app
+          test -x "$app/Contents/MacOS/corevideo-zoom-engine"
+          test -d "$app/Contents/Frameworks/ZoomSDK.framework"
+          otool -L "$app/Contents/MacOS/corevideo-zoom-engine" | grep -q ZoomSDK
+          codesign --verify --deep "$app"
+      - name: Stash engine bundle for the app job (private release only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          name="engine-${GITHUB_REF_NAME//\//-}.tar.gz"
+          tar -czf "$RUNNER_TEMP/$name" -C build/engine corevideo-zoom-engine.app
+          scripts/ci/upload-private-asset.sh "$RUNNER_TEMP/$name"
+          echo "ENGINE_ASSET=$name" >> "$GITHUB_ENV"
+
+  app:
+    name: Operator app (Avalonia, osx-arm64)
+    runs-on: macos-15
+    needs: [native, engine]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Tools
+        run: brew install ninja || true
+      - name: .NET tests
+        run: dotnet test app/CoreVideoEdge.Tests -c Release
+      - name: Build the node
+        run: |
+          cmake -S native -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/mac --target corevideo-edge corevideo-edge-ndi-probe
+      - name: Fetch the engine bundle (private release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          name="engine-${GITHUB_REF_NAME//\//-}.tar.gz"
+          scripts/ci/download-private-asset.sh "$name" "$RUNNER_TEMP/$name"
+          mkdir -p build/engine && tar -xzf "$RUNNER_TEMP/$name" -C build/engine
+      - name: Package CoreVideo Edge.app
+        run: scripts/package-macos-app.sh --node build/mac --engine build/engine/corevideo-zoom-engine.app --out build/dist
+      - name: App self-check
+        run: scripts/ci/check-macos-app.sh "build/dist/CoreVideo Edge.app"
+      - name: Headless UI screenshots (no SDK content)
+        run: node scripts/capture-ui-fixtures.mjs --out build/dist/screenshots
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-screenshots
+          path: build/dist/screenshots
+          if-no-files-found: warn
+      - name: Store the full app (contains the Zoom SDK) on the private release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          name="CoreVideoEdge-mac-${GITHUB_REF_NAME//\//-}.zip"
+          ditto -c -k --keepParent "build/dist/CoreVideo Edge.app" "$RUNNER_TEMP/$name"
+          scripts/ci/upload-private-asset.sh "$RUNNER_TEMP/$name"
