@@ -65,8 +65,7 @@ public sealed class TokenContrastTests
         ["Live", "LiveTint", 4.5], ["Warn", "WarnTint", 4.5], ["ErrorText", "ErrorTint", 4.5], ["Accent", "AccentTint", 4.5],
         ["Text", "ErrorTint", 4.5],
         ["Text2", "LiveTint", 4.5], ["Text2", "WarnTint", 4.5], ["Text2", "ErrorTint", 4.5], ["Text2", "AccentTint", 4.5],
-        // Focus ring on the bg gap around a cyan matrix cell.
-        ["Focus", "Bg", 3.0],
+        // (Focus on Bg, the gap around a cyan matrix cell, is in UiPairs.)
     ];
 
     [Theory]

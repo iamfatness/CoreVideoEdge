@@ -54,7 +54,7 @@ public sealed class AudioMeter : Control
         var length = vertical ? size.Height : size.Width;
         var thick = vertical ? size.Width : size.Height;
         const double gap = 1;
-        const int segments = 24;
+        var segments = vertical ? 24 : 12;
         var seg = (length - gap * (segments - 1)) / segments;
         if (seg <= 0) return;
         var lit = Fraction(level) * segments;

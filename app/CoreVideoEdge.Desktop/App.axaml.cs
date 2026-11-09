@@ -74,6 +74,13 @@ public partial class App : Application
             }
             await vm.Connect.RefreshAccountAsync();
             if (launch.Callback is not null) await vm.Connect.HandleCallbackAsync(launch.Callback);
+            // The node publishes on change only; ask once a second so a silent
+            // node is noticed (stale after 2 s, values removed after 10 s).
+            var poll = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) =>
+            {
+                if (!window.ShuttingDown) _ = client.SendAsync("state");
+            });
+            poll.Start();
         };
         window.ShutdownNode = async () =>
         {
