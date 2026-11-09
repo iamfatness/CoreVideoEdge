@@ -12,6 +12,7 @@
 #include "edge/EdgeConfig.h"
 #include "edge/EngineSupervisor.h"
 #include "edge/IsoSession.h"
+#include "edge/PreviewPublisher.h"
 #include "edge/SubscriptionPolicy.h"
 #include "rpc/Json.h"
 
@@ -131,6 +132,7 @@ class EdgeController {
   std::string filePrefix_;
 
   IsoSession session_;
+  PreviewPublisher preview_;
   std::uint32_t isoRingEpoch_ = 0;
   std::string recordingWarning_;
   std::string lastTakeDir_;

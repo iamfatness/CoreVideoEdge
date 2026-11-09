@@ -67,6 +67,7 @@ EdgeController::EdgeController(EdgeOptions options, Output output)
 
 EdgeController::~EdgeController() {
   if (session_.active()) session_.stop();
+  preview_.stop();
   engine_.stop();
 }
 
@@ -82,6 +83,11 @@ void EdgeController::postCommand(std::string line) { post(Command{std::move(line
 void EdgeController::postEndOfInput() { post(EndOfInput{}); }
 
 int EdgeController::run() {
+  {
+    std::string previewError;
+    if (!preview_.start(PreviewPublisher::defaultDir(), previewError))
+      warnings_.push_back("Monitor previews unavailable: " + previewError);
+  }
   publishState(true);
   while (!quit_) {
     std::deque<Item> batch;
@@ -586,6 +592,12 @@ void EdgeController::tick() {
     markDirty();  // health counters move continuously while recording
   }
   if (phase_ == Phase::InMeeting) markDirty();  // "receiving" ages
+  // Monitor previews follow the routing.
+  std::vector<PreviewSlot> previewSlots;
+  if (phase_ == Phase::InMeeting && engine_.running()) {
+    for (const auto& s : book_.selections()) previewSlots.push_back({s.slot, slotSourceUuid(s.slot), s.participantId});
+  }
+  preview_.setSlots(engine_.shmPrefix(), std::move(previewSlots));
 }
 
 // ---------------------------------------------------------------------------
@@ -645,6 +657,8 @@ Json EdgeController::buildState() const {
 
   // Participants: the roster as the SDK reports it, joined with this node's
   // subscriptions and the resolution actually being received.
+  const auto previewMeasures = preview_.measures();
+  if (!preview_.dir().empty()) state.emplace("previewDir", preview_.dir().string());
   Json::Array participants;
   for (const auto& p : roster_) {
     Json::Object row{
@@ -665,6 +679,10 @@ Json EdgeController::buildState() const {
                          {"height", static_cast<double>(r->second.height)},
                          {"msSinceFrame", static_cast<double>(msSince(r->second.at))},
                          {"receiving", Clock::now() - r->second.at < kReceivingWindow}};
+        if (const auto m = previewMeasures.find(s->slot); m != previewMeasures.end()) {
+          if (m->second.fpsX100 >= 0) rec.emplace("fps", m->second.fpsX100 / 100.0);
+          if (m->second.hasAudio) rec.emplace("audioDb", m->second.audioPeakDbX100 / 100.0);
+        }
         row.emplace("received", Json(std::move(rec)));
       }
     }

@@ -211,9 +211,14 @@ async function main() {
   } else {
     console.log(`INFO  only ${candidates.length} candidates; cap refusal not exercised`);
   }
+  const extraSlots = state.participants.filter((x) => accepted.some((a) => a.id === x.id) && !picks.includes(accepted.find((a) => a.id === x.id))).map((x) => x.slot);
   for (const p of accepted.filter((a) => !picks.includes(a))) {
     const r = await send('subscribe', { participantId: p.id, on: false });
     check(r.ok, `unsubscribed extra ${p.name}`);
+  }
+  if (extraSlots.length && state.previewDir) {
+    await sleep(800);
+    check(extraSlots.every((slot) => !existsSync(join(state.previewDir, `slot-${slot}.cvp`))), `unrouted slot preview files removed (${extraSlots.join(', ')})`);
   }
 
   const pickIds = new Set(picks.map((p) => p.id));
@@ -226,6 +231,30 @@ async function main() {
   }
   check(state.participants.filter((p) => !pickIds.has(p.id)).every((p) => !p.received),
     'no unsubscribed participant is being received');
+
+  // Monitor previews: one memory-mapped file per routed slot (PROTOCOL.md).
+  await sleep(1500);
+  check(typeof state.previewDir === 'string' && existsSync(state.previewDir), `preview folder published (${state.previewDir})`);
+  for (const p of state.participants.filter((x) => pickIds.has(x.id))) {
+    const file = join(state.previewDir ?? '', `slot-${p.slot}.cvp`);
+    if (!check(existsSync(file), `${p.name}: preview file slot-${p.slot}.cvp exists`)) continue;
+    const b = readFileSync(file);
+    const magic = b.toString('latin1', 0, 4);
+    const [w, h, frames] = [b.readUInt32LE(12), b.readUInt32LE(16), b.readUInt32LE(32)];
+    const fpsX100 = b.readInt32LE(36);
+    const db = b.readInt32LE(40);
+    const heartbeat = Number(b.readBigInt64LE(48)), lastFrame = Number(b.readBigInt64LE(56));
+    let lit = 0;
+    for (let i = 64 + 2; i < b.length; i += 4 * 97) if (b[i] > 16) lit++;
+    check(magic === 'CVEP' && w === 480 && h === 270 && frames > 0 && heartbeat - lastFrame < 1000 && lit > 0,
+      `${p.name}: preview live (${frames} frames, last ${heartbeat - lastFrame} ms ago, ${lit} lit samples)`);
+    if (fake) {
+      check(fpsX100 >= (fps - 6) * 100 && fpsX100 <= (fps + 3) * 100 && Math.abs((p.received?.fps ?? 0) - fpsX100 / 100) < 6,
+        `${p.name}: measured ${fpsX100 / 100} fps in the preview, ${p.received?.fps} in state (source ${fps})`);
+      if (!silentIds.has(p.id)) check(db > -6000 && db <= 0 && typeof p.received?.audioDb === 'number',
+        `${p.name}: audio level measured (${db / 100} dBFS)`);
+    }
+  }
 
   // Engine On: Off stops every feed (the engine forgets its subscriptions);
   // On brings them all back without the operator re-routing anything.

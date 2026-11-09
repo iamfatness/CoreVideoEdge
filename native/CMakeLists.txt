@@ -42,6 +42,7 @@ add_library(edge_core STATIC
   src/edge/IsoSourceRecorder.cpp
   src/edge/IsoSession.cpp
   src/edge/EdgeConfig.cpp
+  src/edge/PreviewPublisher.cpp
 )
 target_include_directories(edge_core PUBLIC src)
 target_link_libraries(edge_core PUBLIC edge_lifted mfplat mfreadwrite mfuuid mf ole32)
@@ -100,6 +101,7 @@ add_executable(corevideo-edge-tests
   tests/IsoMp4WriterTest.cpp
   tests/EdgeConfigTest.cpp
   tests/FastConformTest.cpp
+  tests/PreviewPublisherTest.cpp
 )
 target_include_directories(corevideo-edge-tests PRIVATE src tests)
 target_link_libraries(corevideo-edge-tests PRIVATE edge_core)

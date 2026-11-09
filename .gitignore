@@ -15,3 +15,6 @@ config/edge.json
 # Recordings
 *.mp4
 /dist/
+
+# agent worktrees
+.claude/worktrees/
