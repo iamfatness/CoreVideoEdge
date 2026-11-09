@@ -86,8 +86,33 @@ internal static class Headless
         }
     }
 
+    // --render-about <out.png>: the macOS About window, for review.
+    public static int RenderAbout(string[] args)
+    {
+        if (args.Length < 1) { Console.Error.WriteLine("usage: CoreVideoEdge --render-about <out.png>"); return 2; }
+        try
+        {
+            Setup();
+            var window = new AboutWindow();
+            window.Show();
+            Pump();
+            var frame = window.CaptureRenderedFrame() ?? throw new InvalidOperationException("Nothing was rendered.");
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(args[0]))!);
+            frame.Save(args[0]);
+            window.Close();
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            return 1;
+        }
+    }
+
     // --render-brand <dir>: the app icon (Pro's squircle recipe + the Edge mark)
-    // at 16/24/32/48/64/256 packed into CoreVideoEdge.ico, plus a 1024 PNG for macOS.
+    // at 16/24/32/48/64/256 packed into CoreVideoEdge.ico, a full-bleed 1024 PNG,
+    // and icon-mac-1024.png on Apple's icon grid (824 px artwork centred in a
+    // transparent 1024 canvas) that scripts/package-macos-app.sh turns into the .icns.
     public static int RenderBrand(string[] args)
     {
         if (args.Length < 1) { Console.Error.WriteLine("usage: CoreVideoEdge --render-brand <outDir>"); return 2; }
@@ -106,6 +131,7 @@ internal static class Headless
                 else pngs.Add((size, stream.ToArray()));
             }
             File.WriteAllBytes(Path.Combine(dir, "CoreVideoEdge.ico"), BuildIco(pngs));
+            using (var mac = RenderMacIcon(1024)) mac.Save(Path.Combine(dir, "icon-mac-1024.png"));
             return 0;
         }
         catch (Exception ex)
@@ -113,6 +139,19 @@ internal static class Headless
             Console.Error.WriteLine(ex);
             return 1;
         }
+    }
+
+    // macOS app icon grid: the squircle is 824/1024 of the canvas, centred,
+    // so it sits at the same size as other apps in the Dock and Finder.
+    internal static RenderTargetBitmap RenderMacIcon(int canvas)
+    {
+        var art = (int)Math.Round(canvas * 824 / 1024.0);
+        var offset = (canvas - art) / 2.0;
+        var bitmap = new RenderTargetBitmap(new PixelSize(canvas, canvas));
+        using var icon = RenderIcon(art);
+        using (var ctx = bitmap.CreateDrawingContext())
+            ctx.DrawImage(icon, new Rect(offset, offset, art, art));
+        return bitmap;
     }
 
     internal static RenderTargetBitmap RenderIcon(int size)

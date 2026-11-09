@@ -9,7 +9,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>CoreVideoEdge</RootNamespace>
     <Platforms>x64</Platforms>
-    <PlatformTarget>x64</PlatformTarget>
+    <!-- x64 on Windows (unchanged); macOS builds osx-arm64 (AnyCPU IL + an arm64 host). -->
+    <PlatformTarget Condition="'$(OS)' == 'Windows_NT'">x64</PlatformTarget>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 

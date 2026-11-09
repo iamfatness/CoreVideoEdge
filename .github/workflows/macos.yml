@@ -16,6 +16,11 @@ on:
   push:
     branches: [main, 'mac-*']
   workflow_dispatch:
+    inputs:
+      app_only:
+        description: 'Run only the operator-app loop (no native/engine/full app jobs)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -31,8 +36,52 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
 jobs:
+  # Fast loop for the operator app: .NET tests, publish, package, self-check and
+  # mac-rendered screenshots, without needing the engine (and without the node
+  # when the native port does not build yet). The bundle it makes carries NO
+  # Zoom SDK, says so in Contents/Resources/edge-bundle.txt, and the self-check
+  # prints what is missing as error annotations. Only screenshots are uploaded.
+  app-only:
+    name: Operator app only (tests, package, screenshots; no engine)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: .NET tests (Keychain tests run here, for real)
+        run: dotnet test app/CoreVideoEdge.Tests -c Release --logger "console;verbosity=normal"
+      - name: Try to build the node (optional in this job)
+        id: node
+        continue-on-error: true
+        run: |
+          brew install ninja || true
+          cmake -S native -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/mac --target corevideo-edge corevideo-edge-ndi-probe
+      - name: Package CoreVideo Edge.app (no engine)
+        run: |
+          if [ "${{ steps.node.outcome }}" = "success" ]; then
+            scripts/package-macos-app.sh --node build/mac --out build/dist
+          else
+            echo "::warning::The node did not build on macOS yet; packaging the app without it."
+            scripts/package-macos-app.sh --node build/mac --out build/dist --allow-missing-node
+          fi
+      - name: App self-check
+        run: |
+          flags="--allow-missing-engine"
+          [ "${{ steps.node.outcome }}" = "success" ] || flags="$flags --allow-missing-node"
+          scripts/ci/check-macos-app.sh "build/dist/CoreVideo Edge.app" $flags --screenshot-out build/dist/screenshots
+      - name: Headless UI screenshots from the committed fixtures (no SDK content)
+        run: scripts/render-screenshots.sh "build/dist/CoreVideo Edge.app/Contents/MacOS/CoreVideoEdge" build/dist/screenshots
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-screenshots
+          path: build/dist/screenshots
+          if-no-files-found: error
+
   native:
     name: Node, fake engine, tests, validator
+    if: ${{ !inputs.app_only }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +113,7 @@ jobs:
 
   engine:
     name: Real Zoom engine (ZoomSDK.framework)
+    if: ${{ !inputs.app_only }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -136,14 +186,18 @@ jobs:
       - name: Package CoreVideo Edge.app
         run: scripts/package-macos-app.sh --node build/mac --engine build/engine/corevideo-zoom-engine.app --out build/dist
       - name: App self-check
-        run: scripts/ci/check-macos-app.sh "build/dist/CoreVideo Edge.app"
-      - name: Headless UI screenshots (no SDK content)
-        run: node scripts/capture-ui-fixtures.mjs --out build/dist/screenshots
+        run: scripts/ci/check-macos-app.sh "build/dist/CoreVideo Edge.app" --screenshot-out build/dist/screenshots
+      - name: Headless UI screenshots from fake-engine captures (no SDK content)
+        run: |
+          set -e
+          node scripts/capture-ui-fixtures.mjs build/mac/corevideo-edge build/dist/captures "$RUNNER_TEMP/edge-rec" main
+          node scripts/capture-ui-fixtures.mjs build/mac/corevideo-edge build/dist/captures "$RUNNER_TEMP/edge-rec" move
+          scripts/render-screenshots.sh "build/dist/CoreVideo Edge.app/Contents/MacOS/CoreVideoEdge" build/dist/screenshots build/dist/captures
       - uses: actions/upload-artifact@v4
         with:
-          name: mac-screenshots
+          name: mac-screenshots-captured
           path: build/dist/screenshots
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Store the full app (contains the Zoom SDK) on the private release
         env:
           GH_TOKEN: ${{ github.token }}

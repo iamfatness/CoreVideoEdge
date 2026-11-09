@@ -73,3 +73,41 @@ public static class OAuthCallbackRelay
         }
     }
 }
+
+// The one place a corevideo:// callback enters the running app, whichever way
+// it arrived: the Windows second-instance pipe (OAuthCallbackRelay.ServeAsync),
+// the macOS Apple Event (Avalonia ProtocolActivatedEventArgs), or the launch
+// arguments. A callback that arrives before the window is ready (macOS delivers
+// the URL of a cold launch very early) is held and handed over on Attach.
+public sealed class OAuthCallbackInbox
+{
+    private readonly object _gate = new();
+    private readonly List<string> _pending = [];
+    private Action<string>? _handler;
+
+    // Returns false (and drops it) when the value is not a corevideo:// URL.
+    public bool Deliver(string? url)
+    {
+        if (!OAuthCallbackRelay.IsOAuthCallbackUrl(url)) return false;
+        Action<string>? handler;
+        lock (_gate)
+        {
+            handler = _handler;
+            if (handler is null) { _pending.Add(url!); return true; }
+        }
+        handler(url!);
+        return true;
+    }
+
+    public void Attach(Action<string> handler)
+    {
+        string[] held;
+        lock (_gate)
+        {
+            _handler = handler;
+            held = [.. _pending];
+            _pending.Clear();
+        }
+        foreach (var url in held) handler(url);
+    }
+}

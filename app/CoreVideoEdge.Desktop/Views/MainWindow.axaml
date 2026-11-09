@@ -22,8 +22,10 @@
 
   <Grid RowDefinitions="48,Auto,*">
     <!-- ================================================= header -->
-    <Border Grid.Row="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1">
-      <DockPanel Margin="16,0">
+    <!-- macOS: the window extends into the title bar and this header is it
+         (traffic lights at the left; HeaderContent's left margin clears them). -->
+    <Border x:Name="HeaderBar" Grid.Row="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1">
+      <DockPanel x:Name="HeaderContent" Margin="16,0">
         <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,24,0">
           <c:EdgeMark Width="20" Height="20" Stroke="{StaticResource AccentBrush}" Knockout="{StaticResource PanelBrush}"
                       Satellite="{Binding MarkTone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
@@ -32,22 +34,22 @@
 
         <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="0">
           <Button Classes="tab" Classes.active="{Binding IsConnect}" Command="{Binding SelectScreenCommand}" CommandParameter="Connect"
-                  ToolTip.Tip="Ctrl+1">
+                  ToolTip.Tip="{x:Static c:Shortcuts.Connect}">
             <Grid><TextBlock Text="Connect" VerticalAlignment="Center" />
               <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsConnect}" /></Grid>
           </Button>
           <Button Classes="tab" Classes.active="{Binding IsRouting}" Command="{Binding SelectScreenCommand}" CommandParameter="Routing"
-                  ToolTip.Tip="Ctrl+2">
+                  ToolTip.Tip="{x:Static c:Shortcuts.Routing}">
             <Grid><TextBlock Text="Routing" VerticalAlignment="Center" />
               <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsRouting}" /></Grid>
           </Button>
           <Button Classes="tab" Classes.active="{Binding IsMonitor}" Command="{Binding SelectScreenCommand}" CommandParameter="Monitor"
-                  ToolTip.Tip="Ctrl+3">
+                  ToolTip.Tip="{x:Static c:Shortcuts.Monitor}">
             <Grid><TextBlock Text="Monitor" VerticalAlignment="Center" />
               <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsMonitor}" /></Grid>
           </Button>
           <Button Classes="tab" Classes.active="{Binding IsRecord}" Command="{Binding SelectScreenCommand}" CommandParameter="Record"
-                  ToolTip.Tip="Ctrl+4">
+                  ToolTip.Tip="{x:Static c:Shortcuts.Record}">
             <Grid><TextBlock Text="Record" VerticalAlignment="Center" />
               <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsRecord}" /></Grid>
           </Button>

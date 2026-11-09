@@ -1,0 +1,17 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:CoreVideoEdge.Desktop.Controls"
+        x:Class="CoreVideoEdge.Desktop.Views.AboutWindow"
+        Title="About CoreVideo Edge"
+        Width="360" Height="300" CanResize="False"
+        WindowStartupLocation="CenterOwner">
+  <Border Background="{StaticResource PanelBrush}" Padding="32,40,32,28">
+    <StackPanel Spacing="12" HorizontalAlignment="Center">
+      <Image x:Name="AppIcon" Width="72" Height="72" HorizontalAlignment="Center" />
+      <TextBlock Classes="title" Text="CoreVideo Edge" HorizontalAlignment="Center" />
+      <TextBlock x:Name="VersionText" Classes="mono" Foreground="{StaticResource Text2Brush}" HorizontalAlignment="Center" />
+      <TextBlock Classes="secondary" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="280"
+                 Text="Joins the same Zoom meeting as CoreVideo Pro on its own account: ISO records and live feeds to Pro." />
+    </StackPanel>
+  </Border>
+</Window>

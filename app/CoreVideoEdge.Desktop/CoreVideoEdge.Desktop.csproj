@@ -9,7 +9,8 @@
     <RootNamespace>CoreVideoEdge.Desktop</RootNamespace>
     <AssemblyName>CoreVideoEdge</AssemblyName>
     <Platforms>x64</Platforms>
-    <PlatformTarget>x64</PlatformTarget>
+    <!-- x64 on Windows (unchanged); macOS builds osx-arm64 (AnyCPU IL + an arm64 host). -->
+    <PlatformTarget Condition="'$(OS)' == 'Windows_NT'">x64</PlatformTarget>
     <SelfContained>false</SelfContained>
     <Version>0.2.0</Version>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>

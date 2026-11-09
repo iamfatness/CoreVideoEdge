@@ -13,22 +13,26 @@ public sealed record SecretProtection(string Name, Func<string, string> Protect,
 
 public static class EdgeSecretProtection
 {
-    public const string MacOsNotImplemented =
-        "Saving Zoom sign-in tokens is not implemented on macOS yet (the Keychain store is a TODO). " +
-        "Sign-in cannot be kept on this machine; nothing was written to disk.";
-
-    // Windows: the lifted DPAPI protector (current user). Anything else: a
-    // protector that refuses loudly, so tokens are never written in plain text.
+    // Windows: the lifted DPAPI protector (current user). macOS: AES-GCM under a
+    // key held in the login Keychain. Anything else: a protector that refuses
+    // loudly, so tokens are never written in plain text.
     public static SecretProtection ForCurrentPlatform()
     {
         if (OperatingSystem.IsWindows()) return Dpapi();
-        return Refusing(OperatingSystem.IsMacOS() ? MacOsNotImplemented
-            : $"Saving Zoom sign-in tokens is not supported on {Environment.OSVersion.Platform}.");
+        if (OperatingSystem.IsMacOS()) return Keychain();
+        return Refusing($"Saving Zoom sign-in tokens is not supported on {Environment.OSVersion.Platform}.");
     }
 
     [SupportedOSPlatform("windows")]
     private static SecretProtection Dpapi() =>
         new("DPAPI (current Windows user)", DpapiSecretProtector.Protect, DpapiSecretProtector.Unprotect);
+
+    [SupportedOSPlatform("macos")]
+    private static SecretProtection Keychain()
+    {
+        var protector = new KeychainSecretProtector(new MacKeychainKeyStore());
+        return new(protector.Description, protector.Protect, protector.Unprotect);
+    }
 
     internal static SecretProtection Refusing(string reason) =>
         new("none", _ => throw new PlatformNotSupportedException(reason), _ => throw new PlatformNotSupportedException(reason));
@@ -44,7 +48,9 @@ public interface IUrlSchemeRegistrar
 public static class EdgeUrlScheme
 {
     public static IUrlSchemeRegistrar ForCurrentPlatform() =>
-        OperatingSystem.IsWindows() ? new WindowsUrlSchemeRegistrar() : new BundleUrlSchemeRegistrar();
+        OperatingSystem.IsWindows() ? new WindowsUrlSchemeRegistrar()
+        : OperatingSystem.IsMacOS() ? new MacUrlSchemeRegistrar()
+        : new UnsupportedUrlSchemeRegistrar();
 }
 
 // Windows: HKCU\Software\Classes\<scheme>, the same registration CoreVideo
@@ -72,16 +78,12 @@ public sealed class WindowsUrlSchemeRegistrar : IUrlSchemeRegistrar
     }
 }
 
-// macOS: a URL scheme is declared by the app bundle, not registered at run time.
-// TODO(macOS): ship Info.plist with CFBundleURLTypes -> CFBundleURLSchemes
-// ["corevideo"], and receive the URL through the Avalonia macOS activation
-// (IActivatableLifetime / UrlsOpened) instead of a second process + named pipe.
-public sealed class BundleUrlSchemeRegistrar : IUrlSchemeRegistrar
+// Neither Windows nor macOS: there is no supported way to receive the return.
+public sealed class UnsupportedUrlSchemeRegistrar : IUrlSchemeRegistrar
 {
     public bool TryRegister(string scheme, string exePath, out string? error)
     {
-        error = $"The {scheme}:// sign-in return is declared by the app bundle on this platform (Info.plist CFBundleURLTypes), " +
-                "which this build does not ship yet.";
+        error = $"The {scheme}:// sign-in return is not supported on {Environment.OSVersion.Platform}.";
         return false;
     }
 }

@@ -56,7 +56,7 @@
         <!-- primary action -->
         <StackPanel Spacing="8">
           <Button HorizontalAlignment="Stretch" MinHeight="40" Classes.rec="{Binding Recording}" Command="{Binding PrimaryCommand}"
-                  AutomationProperties.Name="{Binding PrimaryText}" ToolTip.Tip="Ctrl+Shift+R">
+                  AutomationProperties.Name="{Binding PrimaryText}" ToolTip.Tip="{x:Static c:Shortcuts.RecordToggle}">
             <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
               <Ellipse Width="10" Height="10" Fill="{StaticResource RecBrush}" VerticalAlignment="Center"
                        IsVisible="{Binding !Recording}" />
