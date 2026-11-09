@@ -123,6 +123,7 @@ class EdgeController {
   std::string rawMediaReason_;
   bool engineOn_ = true;          // operator's Engine On: raw media requested while in a meeting
   bool movingRooms_ = false;      // SDK reported a breakout move / reconnect; `left` is not the end
+  bool awaitingArrival_ = false;  // left for a move, not yet joined the new room (90 s limit)
   std::chrono::steady_clock::time_point movingSince_{};
   int recordHeight_ = 1080;       // 1080 | 720 (16:9)
   int recordFps_ = 0;             // 0 = as Zoom delivers (VFR), 30 | 60 = constant

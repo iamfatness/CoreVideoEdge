@@ -57,6 +57,11 @@ inline std::string validateSrt(const SrtSettings& s) {
   if (s.latencyMs < 20 || s.latencyMs > 8000) return "SRT latency must be 20..8000 ms.";
   if (!s.passphrase.empty() && (s.passphrase.size() < 10 || s.passphrase.size() > 79))
     return "SRT passphrase must be 10 to 79 characters (or empty for none).";
+  for (const char c : s.passphrase) {
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~' || c == '!' ||
+          c == '*' || c == '+' || c == ',' || c == ':' || c == '@'))
+      return "SRT passphrase may use letters, digits and - _ . ~ ! * + , : @ only (it travels in the SRT URL).";
+  }
   return {};
 }
 

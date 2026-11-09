@@ -31,7 +31,6 @@ void* sym(Library l, const char* n) { return dlsym(l, n); }
 std::vector<std::filesystem::path> candidates() {
   std::vector<std::filesystem::path> list;
 #if defined(_WIN32)
-  list.emplace_back("Processing.NDI.Lib.x64.dll");
   if (const char* root = std::getenv("PROGRAMFILES")) {
     const std::filesystem::path base(root);
     list.push_back(base / "NDI/NDI 6 Runtime/v6/Bin/x64/Processing.NDI.Lib.x64.dll");
@@ -39,6 +38,7 @@ std::vector<std::filesystem::path> candidates() {
     list.push_back(base / "NDI/NDI 5 Runtime/v5/Bin/x64/Processing.NDI.Lib.x64.dll");
   }
   if (const char* root = std::getenv("NDI_RUNTIME_DIR")) list.push_back(std::filesystem::path(root) / "Processing.NDI.Lib.x64.dll");
+  list.emplace_back("Processing.NDI.Lib.x64.dll");  // last: a search-path lookup
 #elif defined(__APPLE__)
   list.emplace_back("libndi.dylib");
   list.emplace_back("/usr/local/lib/libndi.dylib");

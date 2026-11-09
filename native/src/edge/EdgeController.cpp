@@ -202,6 +202,7 @@ std::string EdgeController::cmdJoin(const Json& c) {
   lastError_.clear();
   warnings_.clear();
   canEndOtherSession_ = false;
+  movingRooms_ = awaitingArrival_ = false;
   roster_.clear();
   rosterKnown_ = false;
   rawMediaActive_.reset();
@@ -230,6 +231,7 @@ std::string EdgeController::cmdJoin(const Json& c) {
 }
 
 std::string EdgeController::cmdLeave() {
+  movingRooms_ = awaitingArrival_ = false;
   if (phase_ == Phase::Idle) return {};
   if (session_.active()) stopTake("Stopped because the node left the meeting.");
   pendingJoin_.reset();
@@ -348,6 +350,7 @@ void EdgeController::stopTake(const std::string& reason) {
 // ---------------------------------------------------------------------------
 
 void EdgeController::fail(const std::string& message) {
+  movingRooms_ = awaitingArrival_ = false;
   core::nativeLogf("[edge] failed: %s\n", message.c_str());
   lastError_ = message;
   if (session_.active()) stopTake("Stopped: " + message);
@@ -451,6 +454,7 @@ std::string EdgeController::cmdRecordFormat(const Json& c) {
 void EdgeController::handleNotice(const EngineNotice& notice) {
   if (notice.generation != engine_.generation()) return;  // a retired engine
   if (notice.kind == EngineNotice::Kind::Exited) {
+    movingRooms_ = awaitingArrival_ = false;
     if (phase_ == Phase::Leaving) {
       phase_ = Phase::Idle;
       stopEngine();
@@ -490,7 +494,7 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
       break;
     case K::Joined:
       if (movingRooms_) core::nativeLogf("[meeting] arrived after a room move; re-arming\n");
-      movingRooms_ = false;
+      movingRooms_ = awaitingArrival_ = false;
       phase_ = Phase::InMeeting;
       phaseSince_ = Clock::now();
       // Engine On: ask for raw data now. If this account may not record, the
@@ -504,6 +508,10 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
         // name when the new room's roster arrives, and ISOs hold their last
         // frame and write silence through the gap (counted, not hidden).
         core::nativeLogf("[meeting] moving rooms: keeping engine, slots and take\n");
+        // The arrival timeout runs from here, keyed on this flag (not on the
+        // rawMedia reason string, which later engine events overwrite).
+        awaitingArrival_ = true;
+        movingSince_ = Clock::now();
         roster_.clear();
         rosterKnown_ = false;
         received_.clear();
@@ -513,6 +521,7 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
         book_.applyRoster({}, none);  // every slot not present until the new room lists them
         break;
       }
+      movingRooms_ = awaitingArrival_ = false;
       if (session_.active()) stopTake("Stopped because the meeting ended or this node was removed.");
       // A failed join is followed by `left`; keep the engine's specific reason
       // (live 2026-11-09: "does not admit anonymous apps" was overwritten).
@@ -583,9 +592,13 @@ void EdgeController::tick() {
     fail("Timed out waiting for Zoom Meeting SDK authentication.");
   } else if (phase_ == Phase::Joining && now - phaseSince_ > kJoinTimeout) {
     fail("Timed out waiting for the Zoom meeting join result.");
-  } else if (movingRooms_ && rawMediaReason_ == "moving_rooms" && now - movingSince_ > kRoomMoveTimeout) {
-    // Left for a room move but never arrived anywhere: it was a real leave.
+  } else if (movingRooms_ && !awaitingArrival_ && now - movingSince_ > std::chrono::seconds(30)) {
+    // The SDK announced a move / reconnect that never disconnected us: done.
     movingRooms_ = false;
+    markDirty();
+  } else if (awaitingArrival_ && now - movingSince_ > kRoomMoveTimeout) {
+    // Left for a room move but never arrived anywhere: it was a real leave.
+    movingRooms_ = awaitingArrival_ = false;
     if (session_.active()) stopTake("Stopped because the node never arrived in the new room.");
     lastError_ = "Zoom moved this node but it never arrived in a room.";
     phase_ = Phase::Idle;

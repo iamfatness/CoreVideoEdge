@@ -24,12 +24,14 @@ TEST(FeedTargets, PassphraseIsValidatedAndNeverShownInState) {
   s.host = "pro";
   s.passphrase = "short";
   EXPECT_FALSE(validateSrt(s).empty());
-  s.passphrase = "correct horse battery";
+  s.passphrase = "has&ampersand#x";
+  EXPECT_FALSE(validateSrt(s).empty());  // would break the SRT URL
+  s.passphrase = "correct-horse-battery";
   EXPECT_TRUE(validateSrt(s).empty());
   const auto shown = srtUrl(s, 1, true);
   EXPECT_TRUE(shown.find("correct") == std::string::npos);
   EXPECT_TRUE(shown.find("<redacted>") != std::string::npos);
-  EXPECT_TRUE(srtUrl(s, 1, false).find("passphrase=correct horse battery") != std::string::npos);
+  EXPECT_TRUE(srtUrl(s, 1, false).find("passphrase=correct-horse-battery") != std::string::npos);
 }
 
 TEST(FeedTargets, SrtNeedsProsAddress) {

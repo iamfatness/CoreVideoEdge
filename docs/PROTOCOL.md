@@ -23,7 +23,7 @@ Every command may carry an `"id"`; the reply echoes it:
 | `join` | `meeting` (link or ID), optional `passcode`, `displayName`, `sdkJwt`, `userZak`, `onBehalfToken`, `appPrivilegeToken`, `endOtherMeeting` | Joins capture-only: camera off, own mic muted. Tokens fall back to `COREVIDEO_ZOOM_SDK_JWT`, `COREVIDEO_ZOOM_USER_ZAK`, `COREVIDEO_ZOOM_ON_BEHALF_TOKEN`, `COREVIDEO_ZOOM_APP_PRIVILEGE_TOKEN`; with no JWT, `COREVIDEO_ZOOM_PUBLIC_APP_KEY` or Pro's public app key. Tokens are never logged and are dropped once sent to the engine. `endOtherMeeting:true` only after a same-account collision, and only because the operator asked. |
 | `leave` | | Stops a take first (files finalize). |
 | `subscribe` | `participantId`, `on` (default true) | 1080p video + isolated audio. Refused past the cap, refused for this node itself, refused to turn off a source whose ISO is recording. |
-| `unsubscribe-slot` | `slot` | Frees a slot held for a guest who left. |
+| `unsubscribe-slot` | `slot` | Frees a slot (typically one held for a guest who left). Refused while that slot's ISO is recording. |
 | `iso` | `slot`, `on` | Whether the subscribed source gets an ISO. Fixed while recording. |
 | `set-record-folder` | `path` | Not while recording. |
 | `set-file-prefix` | `prefix` | Not while recording. |
@@ -53,7 +53,7 @@ estimated or defaulted for display.
   "recordFolder": "D:\\EdgeISO", "filePrefix": "edge01",
   "configErrors": ["..."], "configWarning": "...", "engineWarnings": ["..."],
   "engineSilentMs": 12000,            // engine heartbeat missing > 10 s
-  "rawMedia": { "active": true, "reason": "..." },   // as reported by the engine
+  "rawMedia": { "active": true, "reason": "..." },   // as reported by the engine; during a breakout move the node sets {active:false, reason:"moving_rooms"} until the new room re-arms
   "participants": [                   // absent until the first roster
     { "id": 16778240, "name": "Alice", "videoOn": true, "talking": false, "muted": true,
       "host": false, "self": true,    // self: this node
@@ -116,8 +116,11 @@ the passphrase redacted), "state": "starting|waiting|sending|failed",
 be sent), "audioSeconds", "receivers" (NDI: connected receivers, measured by
 the sender), "connected" (SRT: Pro's listener reached), "error" } ] }`.
 
-SRT feeds are 1920x1080 H.264 (NVENC, else x264) at a constant 30 fps plus
-AAC 48 kHz stereo in MPEG-TS, studio range. NDI feeds pass the source size and
+SRT feeds are 1920x1080 H.264 (NVENC, else x264 when NVENC is missing or out
+of encode sessions) at a constant 30 fps plus AAC 48 kHz stereo in MPEG-TS,
+studio range. A guest with their camera off is sent as black (after 1 s) so
+their audio still reaches Pro. The SRT passphrase may use letters, digits and
+`- _ . ~ ! * + , : @` (it travels in the SRT URL). NDI feeds pass the source size and
 rate through as I420 (studio range) with planar float audio, plus per-frame
 metadata `<corevideo_edge guest="..." zoom_id="..."/>`.
 
@@ -128,7 +131,9 @@ app can draw the Monitor without touching Zoom or the engine. One file per
 slot, memory-mapped, portable (Windows file mapping / POSIX `mmap`):
 
 `<previewDir>/slot-<N>.cvp` (N = 1..8), created when the slot is routed,
-deleted when it is unrouted. Little-endian, fixed size:
+deleted when it is unrouted (best effort: on Windows a file a reader still has
+mapped is removed once the reader lets go; readers must treat a heartbeat that
+stops as "not publishing"). Little-endian, fixed size:
 
 | Offset | Type | Field |
 |---|---|---|

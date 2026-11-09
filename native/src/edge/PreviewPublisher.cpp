@@ -154,12 +154,14 @@ bool PreviewPublisher::start(const std::filesystem::path& dir, std::string& erro
   std::error_code ec;
   // Folders left by node processes that no longer run (a crash) are swept;
   // a folder whose files are still open is in use and stays.
+#if defined(_WIN32)
   if (dir.has_parent_path()) {
     for (const auto& entry : std::filesystem::directory_iterator(dir.parent_path(), ec)) {
-      if (entry.path() != dir) std::filesystem::remove_all(entry.path(), ec);
+      if (entry.path() != dir) std::filesystem::remove_all(entry.path(), ec);  // in-use files refuse
     }
     ec.clear();
   }
+#endif
   std::filesystem::remove_all(dir, ec);
   ec.clear();
   std::filesystem::create_directories(dir, ec);
@@ -221,7 +223,9 @@ void PreviewPublisher::run() {
       auto slot = std::make_unique<Slot>();
       slot->spec = w;
       if (!slot->file.open(dir_ / ("slot-" + std::to_string(w.slot) + ".cvp"), kFileBytes)) {
-        core::nativeLogf("[preview] could not create the preview file for slot %d\n", w.slot);
+        static thread_local std::map<int, bool> reported;
+        if (!reported[w.slot]) core::nativeLogf("[preview] could not create the preview file for slot %d\n", w.slot);
+        reported[w.slot] = true;
         continue;
       }
       std::uint8_t* h = slot->file.data();

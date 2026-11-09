@@ -61,6 +61,9 @@ bool IsoMp4Writer::open(const std::filesystem::path& path, const IsoWriterSettin
   settings_.width = std::max(2, settings.width & ~1);
   settings_.height = std::max(2, settings.height & ~1);
   settings_.nominalFps = std::max(1, settings.nominalFps);
+  // A constant-rate take declares its real rate (60 fps needs H.264 level 4.2
+  // and twice the bits of 30; review 2026-11-09).
+  if (settings.constantFps == 30 || settings.constantFps == 60) settings_.nominalFps = settings.constantFps;
   frameDuration100ns_ = 10'000'000LL / (settings.constantFps == 30 || settings.constantFps == 60 ? settings.constantFps
                                                                                               : settings_.nominalFps);
   pendingPts100ns_ = -1;

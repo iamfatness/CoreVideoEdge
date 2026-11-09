@@ -160,30 +160,54 @@ class SrtSink final : public FeedSink {
                                    std::to_wstring(slot_) + L"-" + std::to_wstring(attempt);
     HANDLE audio = CreateNamedPipeW(audioPipe.c_str(), PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 1 << 20,
                                     1 << 20, 0, nullptr);
-    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    if (audio == INVALID_HANDLE_VALUE) {
+      setProblem("Could not create the SRT feed's audio pipe.");
+      return Outcome::Exited;
+    }
+    // Up to 8 slots launch FFmpeg at once. Every pipe is created
+    // NON-inheritable and only this child's two ends are passed, through an
+    // explicit handle list: otherwise one slot's FFmpeg inherits another
+    // slot's pipe ends, the other slot never sees EOF / broken pipe, and a
+    // reconfigure deadlocks the node (review 2026-11-09).
     HANDLE videoRead = nullptr, videoWrite = nullptr, logRead = nullptr, logWrite = nullptr;
-    CreatePipe(&videoRead, &videoWrite, &sa, 8 << 20);
-    CreatePipe(&logRead, &logWrite, &sa, 0);
-    SetHandleInformation(videoWrite, HANDLE_FLAG_INHERIT, 0);
-    SetHandleInformation(logRead, HANDLE_FLAG_INHERIT, 0);
-
-    std::wstring cmd = quote(widen(ffmpeg_));
-    for (const auto& a : argv(nvenc, audioPipe)) cmd += L" " + quote(a);
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = videoRead;
-    si.hStdOutput = logWrite;
-    si.hStdError = logWrite;
     PROCESS_INFORMATION pi{};
-    const BOOL started = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
-                                        nullptr, &si, &pi);
-    CloseHandle(videoRead);
-    CloseHandle(logWrite);
+    BOOL started = FALSE;
+    {
+      static std::mutex launchMutex;
+      std::lock_guard<std::mutex> launch(launchMutex);
+      if (CreatePipe(&videoRead, &videoWrite, nullptr, 8 << 20) && CreatePipe(&logRead, &logWrite, nullptr, 0) &&
+          SetHandleInformation(videoRead, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) &&
+          SetHandleInformation(logWrite, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+        std::wstring cmd = quote(widen(ffmpeg_));
+        for (const auto& a : argv(nvenc, audioPipe)) cmd += L" " + quote(a);
+        HANDLE inherit[2] = {videoRead, logWrite};
+        SIZE_T attrSize = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+        std::vector<unsigned char> attrBuffer(attrSize);
+        auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuffer.data());
+        if (InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize) &&
+            UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof(inherit), nullptr,
+                                      nullptr)) {
+          STARTUPINFOEXW si{};
+          si.StartupInfo.cb = sizeof(si);
+          si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+          si.StartupInfo.hStdInput = videoRead;
+          si.StartupInfo.hStdOutput = logWrite;
+          si.StartupInfo.hStdError = logWrite;
+          si.lpAttributeList = attrs;
+          started = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                                   CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
+                                   &si.StartupInfo, &pi);
+          DeleteProcThreadAttributeList(attrs);
+        }
+      }
+      if (videoRead) CloseHandle(videoRead);
+      if (logWrite) CloseHandle(logWrite);
+    }
     if (!started) {
       setProblem("Could not start FFmpeg for the SRT feed.");
-      CloseHandle(videoWrite);
-      CloseHandle(logRead);
+      if (videoWrite) CloseHandle(videoWrite);
+      if (logRead) CloseHandle(logRead);
       CloseHandle(audio);
       return Outcome::Exited;
     }
@@ -208,9 +232,17 @@ class SrtSink final : public FeedSink {
               connected_ = true;
               setProblem({});
             }
-            if (line.find("h264_nvenc") != std::string::npos &&
+            // Any NVENC failure falls back to x264: missing driver, no device,
+            // and the common consumer-GPU one, out of encode sessions
+            // ("OpenEncodeSessionEx failed: out of memory") once the ISOs
+            // already hold several (review 2026-11-09).
+            if ((line.find("nvenc") != std::string::npos || line.find("OpenEncodeSessionEx") != std::string::npos) &&
                 (line.find("Cannot load") != std::string::npos || line.find("No capable devices") != std::string::npos ||
-                 line.find("Unknown encoder") != std::string::npos || line.find("not found") != std::string::npos))
+                 line.find("Unknown encoder") != std::string::npos || line.find("not found") != std::string::npos ||
+                 line.find("failed") != std::string::npos || line.find("rror") != std::string::npos))
+              encoderMissing = true;
+            if (line.find("Error while opening encoder") != std::string::npos ||
+                line.find("Error initializing output stream") != std::string::npos)
               encoderMissing = true;
             const bool mentionsSrt = line.find("srt://") != std::string::npos;
             if (line.find("Connection setup failure") != std::string::npos ||
@@ -248,14 +280,21 @@ class SrtSink final : public FeedSink {
     });
 
     // Video pacer: a constant 30 fps of the latest picture (repeat when Zoom
-    // is slower, newest wins when faster). Starts once the first frame exists.
+    // is slower, newest wins when faster). A guest with their camera off has
+    // no frames at all; after 1 s the feed carries black so FFmpeg starts and
+    // the guest's audio still reaches Pro (review 2026-11-09).
     std::vector<std::uint8_t> frame;
-    auto next = std::chrono::steady_clock::now();
+    const auto launched = std::chrono::steady_clock::now();
+    auto next = launched;
     while (running_.load()) {
       if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) break;
       {
         std::lock_guard<std::mutex> lock(frameMutex_);
         if (haveFrame_) frame = latest_;
+      }
+      if (frame.empty() && std::chrono::steady_clock::now() - launched > std::chrono::seconds(1)) {
+        frame.assign(static_cast<size_t>(kW) * kH * 3 / 2, 128);
+        std::fill(frame.begin(), frame.begin() + static_cast<long long>(kW) * kH, std::uint8_t{0});  // full-range black
       }
       if (!frame.empty()) {
         DWORD written = 0;
