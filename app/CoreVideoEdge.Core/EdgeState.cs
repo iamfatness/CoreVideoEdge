@@ -17,7 +17,10 @@ public sealed record EdgeParticipant(
     bool Iso,
     int? ReceivedWidth,
     int? ReceivedHeight,
-    bool Receiving);
+    bool Receiving,
+    long? MsSinceFrame = null,
+    double? ReceivedFps = null,      // v2: measured over the last second by the preview reader
+    double? AudioDb = null);         // v2: isolated-audio peak dBFS over ~100 ms
 
 public sealed record EdgeSubscription(int Slot, uint ParticipantId, string Name, bool Present, bool Iso, bool FromConfig);
 
@@ -36,7 +39,17 @@ public sealed record EdgeIsoStream(
     int? Width,
     int? Height,
     long? MsSinceVideo,
-    string? Warning);
+    string? Warning,
+    uint? ParticipantId = null,
+    long? VideoDropped = null,
+    long? HeldRepeats = null,
+    long? EncoderBacklogPeak = null,
+    long? CadenceRepeats = null,     // v2: constant-rate formats only
+    long? CadenceSkipped = null,     // v2
+    long? MsSinceAudio = null,
+    long? Bytes = null);             // present once the file is finalized
+
+public sealed record EdgeRecordFormat(int Width, int Height, int Fps);
 
 public sealed record EdgeState
 {
@@ -51,15 +64,21 @@ public sealed record EdgeState
     public int MaxSubscriptions { get; init; }
     public string RecordFolder { get; init; } = "";
     public string FilePrefix { get; init; } = "";
+    public string? ConfigPath { get; init; }
     public IReadOnlyList<string> ConfigErrors { get; init; } = [];
     public string? ConfigWarning { get; init; }
     public IReadOnlyList<string> EngineWarnings { get; init; } = [];
     public long? EngineSilentMs { get; init; }
     public bool? RawMediaActive { get; init; }
     public string? RawMediaReason { get; init; }
+    public bool? EngineOn { get; init; }                 // v2: the operator's Engine On choice
+    public bool MovingRooms { get; init; }               // v2
+    public EdgeRecordFormat? RecordFormat { get; init; } // v2
+    public string? PreviewDir { get; init; }             // v2
     public IReadOnlyList<EdgeParticipant>? Participants { get; init; }  // null: roster not known
     public IReadOnlyList<EdgeSubscription> Subscriptions { get; init; } = [];
     public bool Recording { get; init; }
+    public string? RecordingStartedUtc { get; init; }
     public long? RecordingElapsedMs { get; init; }
     public string? SessionDir { get; init; }
     public string? RecordingWarning { get; init; }
@@ -67,6 +86,12 @@ public sealed record EdgeState
 
     public bool InMeeting => Phase == "in-meeting";
     public bool CanJoin => Phase is "idle" or "failed";
+
+    public static EdgeState Parse(string line)
+    {
+        using var doc = JsonDocument.Parse(line);
+        return Parse(doc.RootElement);
+    }
 
     public static EdgeState Parse(JsonElement root)
     {
@@ -76,8 +101,12 @@ public sealed record EdgeState
             e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         static bool B(JsonElement e, string name) =>
             e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
-        static long? LN(JsonElement e, string name) =>
-            e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? (long)v.GetDouble() : null;
+        static bool? BN(JsonElement e, string name) =>
+            e.TryGetProperty(name, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? v.ValueKind == JsonValueKind.True : null;
+        static double? DN(JsonElement e, string name) =>
+            e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
+        static long? LN(JsonElement e, string name) => DN(e, name) is double d ? (long)d : null;
         static long L(JsonElement e, string name) => LN(e, name) ?? 0;
         static IReadOnlyList<string> Strings(JsonElement e, string name) =>
             e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
@@ -95,7 +124,10 @@ public sealed record EdgeState
                     B(p, "self"), (int?)LN(p, "slot"), B(p, "iso"),
                     hasReceived ? (int?)LN(r, "width") : null,
                     hasReceived ? (int?)LN(r, "height") : null,
-                    hasReceived && B(r, "receiving"));
+                    hasReceived && B(r, "receiving"),
+                    hasReceived ? LN(r, "msSinceFrame") : null,
+                    hasReceived ? DN(r, "fps") : null,
+                    hasReceived ? DN(r, "audioDb") : null);
             }).ToList();
         }
 
@@ -106,12 +138,13 @@ public sealed record EdgeState
 
         bool recording = false;
         long? elapsed = null;
-        string? sessionDir = null, recordingWarning = null;
+        string? sessionDir = null, recordingWarning = null, startedUtc = null;
         var streams = new List<EdgeIsoStream>();
         if (root.TryGetProperty("recording", out var rec) && rec.ValueKind == JsonValueKind.Object)
         {
             recording = B(rec, "active");
             elapsed = LN(rec, "elapsedMs");
+            startedUtc = SN(rec, "startedUtc");
             sessionDir = SN(rec, "sessionDir");
             recordingWarning = SN(rec, "warning");
             if (rec.TryGetProperty("streams", out var list) && list.ValueKind == JsonValueKind.Array)
@@ -120,7 +153,10 @@ public sealed record EdgeState
                     (int)L(x, "index"), (int)L(x, "slot"), S(x, "name"), S(x, "path"), S(x, "state"),
                     L(x, "videoFrames"), L(x, "videoLost"), L(x, "audioSamples"), L(x, "silenceSamples"),
                     L(x, "audioLostPackets"), SN(x, "encoder"), (int?)LN(x, "width"), (int?)LN(x, "height"),
-                    LN(x, "msSinceVideo"), SN(x, "warning"))).ToList();
+                    LN(x, "msSinceVideo"), SN(x, "warning"),
+                    LN(x, "participantId") is long pid ? (uint)pid : null,
+                    LN(x, "videoDropped"), LN(x, "heldRepeats"), LN(x, "encoderBacklogPeak"),
+                    LN(x, "cadenceRepeats"), LN(x, "cadenceSkipped"), LN(x, "msSinceAudio"), LN(x, "bytes"))).ToList();
             }
         }
 
@@ -130,6 +166,13 @@ public sealed record EdgeState
         {
             rawActive = B(raw, "active");
             rawReason = SN(raw, "reason");
+        }
+
+        EdgeRecordFormat? format = null;
+        if (root.TryGetProperty("recordFormat", out var fmt) && fmt.ValueKind == JsonValueKind.Object &&
+            LN(fmt, "height") is long fh)
+        {
+            format = new EdgeRecordFormat((int)(LN(fmt, "width") ?? fh * 16 / 9), (int)fh, (int)(LN(fmt, "fps") ?? 0));
         }
 
         return new EdgeState
@@ -145,15 +188,21 @@ public sealed record EdgeState
             MaxSubscriptions = (int)L(root, "maxSubscriptions"),
             RecordFolder = S(root, "recordFolder"),
             FilePrefix = S(root, "filePrefix"),
+            ConfigPath = SN(root, "configPath"),
             ConfigErrors = Strings(root, "configErrors"),
             ConfigWarning = SN(root, "configWarning"),
             EngineWarnings = Strings(root, "engineWarnings"),
             EngineSilentMs = LN(root, "engineSilentMs"),
             RawMediaActive = rawActive,
             RawMediaReason = rawReason,
+            EngineOn = BN(root, "engineOn"),
+            MovingRooms = B(root, "movingRooms"),
+            RecordFormat = format,
+            PreviewDir = SN(root, "previewDir"),
             Participants = participants,
             Subscriptions = subscriptions,
             Recording = recording,
+            RecordingStartedUtc = startedUtc,
             RecordingElapsedMs = elapsed,
             SessionDir = sessionDir,
             RecordingWarning = recordingWarning,
