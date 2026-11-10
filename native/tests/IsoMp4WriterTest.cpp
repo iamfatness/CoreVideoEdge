@@ -2,6 +2,7 @@
 
 #include "edge/IsoMp4Writer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -268,4 +269,31 @@ TEST(IsoMp4Writer, A720pRecordFormatWritesA720pFile) {
   const auto out = run("ffprobe -v error -select_streams v -show_entries stream=width,height -of compact \"" + path.string() + "\" 2>&1");
   if (toolMissing(out)) return;
   EXPECT_TRUE(out.find("width=1280|height=720") != std::string::npos);
+}
+
+// The validator finds the fake's A/V clap as one full-white frame (decoded
+// luma average > 235). Whatever the platform encoder does to a single white
+// frame between grey ones decides whether that check can pass.
+TEST(IsoMp4Writer, ASingleWhiteFrameDecodesWhite) {
+  MfScope mf;
+  const auto path = testDir() / "writer-white.mp4";
+  IsoMp4Writer writer;
+  IsoWriterSettings settings;
+  std::string error;
+  ASSERT_TRUE(writer.open(path, settings, error));
+  std::vector<std::uint8_t> grey(1920 * 1080 * 3 / 2, 128), white(1920 * 1080 * 3 / 2, 128);
+  std::fill(white.begin(), white.begin() + 1920 * 1080, std::uint8_t{255});
+  for (int i = 0; i < 60; ++i)
+    ASSERT_TRUE(writer.writeVideo((i == 30 ? white : grey).data(), 333'333LL * (i + 1), error));
+  std::vector<float> tone(48000 * 2 * 2, 0.0f);
+  ASSERT_TRUE(writer.writeAudio(tone.data(), 48000 * 2, error));
+  ASSERT_TRUE(writer.finalize(21'000'000, error));
+  const auto out = run("ffmpeg -v error -i \"" + path.string() +
+                       "\" -an -vf scale=192:108,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=- -f null - 2>&1");
+  if (toolMissing(out)) return;
+  double peak = 0;
+  for (size_t at = out.find("YAVG="); at != std::string::npos; at = out.find("YAVG=", at + 5))
+    peak = std::max(peak, std::atof(out.c_str() + at + 5));
+  std::fprintf(stderr, "  encoder=%s brightest decoded frame YAVG=%.1f\n", writer.encoderPath().c_str(), peak);
+  EXPECT_TRUE(peak > 235);
 }

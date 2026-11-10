@@ -39,6 +39,9 @@
 #include <mutex>
 #include <thread>
 
+#include <pthread.h>
+#include <sys/qos.h>
+
 namespace corevideo::edge {
 namespace {
 
@@ -558,7 +561,14 @@ class AvIsoEncoder final : public IsoEncoderBackend {
 
 std::unique_ptr<IsoEncoderBackend> makeIsoEncoderBackend() { return std::make_unique<AvIsoEncoder>(); }
 
-IsoMediaThreadScope::IsoMediaThreadScope() { ok_ = true; }
+// The recorder thread drains a 4-frame (~130 ms) ISO ring every 5 ms; if the
+// scheduler leaves it off-CPU longer than that, arrivals are overwritten
+// (measured on the 3-vCPU CI runner: 150 ms gaps under 6 x 1080p). Ask for the
+// QoS class macOS schedules first. Same role as a "Pro Audio"/MMCSS thread.
+IsoMediaThreadScope::IsoMediaThreadScope() {
+  (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  ok_ = true;
+}
 IsoMediaThreadScope::~IsoMediaThreadScope() = default;
 
 }  // namespace corevideo::edge
