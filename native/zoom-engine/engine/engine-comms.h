@@ -50,6 +50,15 @@ public:
     // silent virtual mic is installed, so "open" is silent to the room.
     static bool owns_mic();
 
+    // From the join line: Edge joins capture-only (the virtual mic + unmute
+    // apply). A join that is NOT capture-only (an operator who speaks in the
+    // meeting) keeps its own mic: no virtual mic, no unmute, only a report.
+    void set_capture_only(bool capture_only);
+
+    // From onMeetingStatusChanged, first thing, on EVERY status: drops mic
+    // ownership synchronously and, away from INMEETING, releases the bank.
+    void on_meeting_status(int status);
+
     // Before CleanUPSDK(): stops the timer, releases the bank, joins the
     // audio worker (and with it the TX pacer thread), removes the silent mic.
     void shutdown();

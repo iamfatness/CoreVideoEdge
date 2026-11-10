@@ -105,12 +105,25 @@ file in the same change as any substantive work.
 - **The engine's command dispatch is substring matching** (`line.find("join")`,
   `"quit"`, `"leave"`). Any new verb that carries free text (device names)
   must be routed BEFORE it, by exact command name (`comms_protocol.h`).
-- **Capture-only mutes our mic; talkback is SILENT while our mic is muted**
-  (ZComms law 1). Comms opens the mic only behind a never-fed virtual mic
-  (`setExternalAudioSource`), and `enforce_capture_only` stands down only
-  while that is installed. If it cannot be installed, the mic stays closed
-  (the room must never hear this PC) and talkback is silent: say so, do not
-  "fix" it by unmuting.
+- **The real mic can never be open to the room.** Talkback is SILENT while
+  our mic is muted (ZComms law 1), so Comms opens it -- but only behind a
+  never-fed virtual mic, and `setExternalAudioSource` returning SUCCESS proves
+  nothing: without the raw-data licence it can succeed and do nothing
+  (ZComms). So: require `HasRawdataLicense()`; ownership is PROVISIONAL until
+  `onMicInitialize` (1.5 s grace), and any drop (`onMicUninitialized`, flag
+  false) clears ownership FIRST then `MuteAudio(self)` at once, giving up for
+  the meeting. All of it lives in `comms/mic_guard` (pure, tested); the engine
+  only performs. Never "fix" a closed mic by unmuting.
+- **Mic ownership is cleared synchronously on every meeting status change**
+  (`EngineComms::on_meeting_status`, first line of `onMeetingStatusChanged`).
+  A tick-driven reset left `owns_mic()` true across a fast leave/rejoin, so
+  the attach-time capture-only mute was skipped. MEETING_STATUS_LOCKED/
+  UNLOCKED fire while still in the meeting: ignore them.
+- **A non-capture-only join is never given a virtual mic or unmuted** (Pro's
+  operator speaks in the meeting); Comms only reports their mute.
+- **A held talk key needs an owner.** stdin EOF quits the node, which sends
+  `comms_release_all` first; `comms-key` `leaseMs` covers a hung-but-alive
+  app.
 - **Only one listener per SDK controller.** `EngineParticipants` owns the
   participants controller's event slot; Comms polls the roster (1 s). Never
   `SetEvent` a second listener on a controller something else owns.
@@ -121,6 +134,8 @@ file in the same change as any substantive work.
   the thread video callbacks and the command loop share). They run on the
   comms audio worker; the SDK thread only does quick getters and the
   talkback calls.
+- **The meter must not drive the state line**: `CommsStateEmitter` sends a
+  meter-only change at most every 250 ms; anything else at once.
 - **A range-for over `json().get(..)->asArray()` on a temporary `Json`
   dangles** (the array lease dies with the temporary). Keep the tree in a
   local first.
@@ -209,7 +224,9 @@ screenshot after a UI change. Never drive the desktop; use the control API or th
 ## Not yet verified (be honest about it)
 
 - **Comms against real Zoom: nothing.** The real engine compiles and links on
-  SDK 7.1.5; the talkback path, the silent virtual mic, unmute under
+  SDK 7.1.5; the talkback path, the silent virtual mic (including whether
+  `onMicInitialize` really arrives within 1.5 s of the install on a licensed
+  sign-in -- if not, the guard mutes and talkback is silent), unmute under
   capture-only, channel creation as co-host, delivery to a desktop guest, the
   duck, breakout moves (channel re-creation vs the 16 cap) and raw video/ISO
   on 7.1.5 in a live meeting are all unproven. Only the fake (unit tests,

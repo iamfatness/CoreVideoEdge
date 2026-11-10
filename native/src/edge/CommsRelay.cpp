@@ -73,7 +73,8 @@ const Json* findRosterEntry(const Json* comms, double participantId) {
 
 bool isCommsVerb(const std::string& cmd) {
   return cmd == "comms-key" || cmd == "comms-latch" || cmd == "comms-assign" || cmd == "comms-mic" ||
-         cmd == "comms-sidetone-out" || cmd == "comms-sidetone" || cmd == "comms-tone" || cmd == "comms-gain";
+         cmd == "comms-sidetone-out" || cmd == "comms-sidetone" || cmd == "comms-tone" || cmd == "comms-gain" ||
+         cmd == "comms-release-all";
 }
 
 CommsRelayResult buildCommsEngineLine(const std::string& cmd, const Json& c, bool inMeeting, const Json* lastComms) {
@@ -102,6 +103,18 @@ CommsRelayResult buildCommsEngineLine(const std::string& cmd, const Json& c, boo
     if (wantsAll) line.emplace("slot", "all");
     else line.emplace("slot", static_cast<double>(*slot));
     line.emplace("on", *on);
+    // Optional hold lease (comms-key only): the hold drops unless re-sent
+    // within leaseMs, so a hung app cannot leave a live mic on talent.
+    if (const auto* leaseValue = c.get("leaseMs")) {
+      const auto lease = intField(c, "leaseMs");
+      if (cmd != "comms-key" || !leaseValue->isNumber() || !lease || *lease < 0 || *lease > 60000) {
+        r.error = "\"leaseMs\" (comms-key only) must be a whole number of ms, 0-60000.";
+        return r;
+      }
+      if (*on && *lease > 0) line.emplace("lease_ms", static_cast<double>(*lease));
+    }
+  } else if (cmd == "comms-release-all") {
+    // Every held key and ALL CALL up; never refused (latches stay).
   } else if (cmd == "comms-assign") {
     const auto on = boolField(c, "on");
     const auto slot = intField(c, "slot");

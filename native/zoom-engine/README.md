@@ -162,18 +162,46 @@ Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt
    - `EngineComms::shutdown()` runs after the heartbeat stops and before
      `Leave`/`CleanUPSDK()`: the bank is released, the audio worker and the
      TX pacer thread are joined, the silent mic removed;
-   - **delta 1 changes**: `enforce_capture_only()` no longer counts our mic
-     as "open" while `EngineComms::owns_mic()` -- i.e. while a never-fed
-     virtual mic is installed (`setExternalAudioSource`), which makes the open
-     mic silent to the room. Comms installs it only when the station can run
-     talkback (in meeting, controller, supported, host/co-host), and only
-     then unmutes (`UnMuteAudio(<self id>)`, re-asserted every 2 s). If the
-     silent mic cannot be installed the mic is NEVER opened and the ops log
-     says talkback is silent. The camera rule is unchanged.
+   - `onMeetingStatusChanged` calls `EngineComms::on_meeting_status()`
+     FIRST, on every status: mic ownership is dropped synchronously (so
+     `attach()`'s capture-only mute applies on re-entry even when a leave/
+     rejoin or reconnect lands between two ticks) and, away from INMEETING
+     (LOCKED/UNLOCKED excepted: those fire while still in the meeting), the
+     bank is released at once so the TX pacer can never reach a controller
+     the SDK is tearing down;
+   - the join handler passes `capture_only` to `EngineComms::set_capture_only()`;
+   - **delta 1 changes**: `enforce_capture_only()` does not count our mic as
+     "open" while `EngineComms::owns_mic()`. Ownership is decided by
+     `comms/mic_guard` (pure, unit-tested) under one rule: **the real mic can
+     never be open to the room**. Only for a capture-only join, only when the
+     station can run talkback (in meeting, controller, supported,
+     host/co-host), and only with `HasRawdataLicense()` (without it ZComms
+     found `setExternalAudioSource` can succeed and do nothing), the engine
+     installs a never-fed virtual mic, owns the mic PROVISIONALLY and unmutes
+     (`UnMuteAudio(<self id>)`, re-asserted every 2 s; not gated on init, the
+     SDK may initialise the virtual mic only once audio flows). If
+     `onMicInitialize` has not arrived 1.5 s after the install, or the virtual
+     mic is ever dropped afterwards (`onMicUninitialized` -- acted on inside
+     the callback -- or the flag going false), ownership is cleared FIRST and
+     `MuteAudio(<self id>)` sent at once, and Comms gives up the mic for that
+     meeting (a retry would re-expose the real mic for another grace window).
+     A synchronous install refusal exposes nothing and is retried every 5 s
+     (logged once). A join that is NOT capture-only (Pro's operator who
+     speaks) is never touched: no virtual mic, no unmute; the ops log says
+     when their own mute silences talkback. The camera rule is unchanged;
+   - `comms_release_all` drops every held key and ALL CALL (latches stay);
+     `comms_key` takes an optional `lease_ms` after which an unrefreshed hold
+     drops by itself; the node sends `comms_release_all` before quitting
+     (its stdin closing -- the app gone -- quits it);
+   - `comms_state` change detection ignores the meter (`CommsStateEmitter`):
+     a meter-only change goes out at most every 250 ms;
+   - shutdown waits at most 3 s for the comms audio worker (a stuck WASAPI
+     driver is leaked, not allowed to hang quit).
    The ZComms laws carried over (each enforced in `comms/comms_core.cpp` or
    the ported `TalkbackChannels`/`DuckPlanner`):
    - L1 talkback delivers only while our meeting mic is OPEN (above; MTG MIC
-     lamp = `lamps.meeting_mic`);
+     lamp = `lamps.meeting_mic`) -- and the real mic is never open to the
+     room (mic_guard);
    - L2 talkback does not cross breakout rooms -- NOT handled this slice: no
      room tracking, reach counts everyone as reachable;
    - L3 same-account host collision: already answered by

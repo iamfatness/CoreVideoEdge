@@ -34,7 +34,8 @@ Every command may carry an `"id"`; the reply echoes it:
 | `engine` | `on` (default true) | Engine On: `true` asks Zoom for raw media (and asks the host for record permission when this account lacks it); `false` releases it. Refused off while recording. Applies when next in a meeting if sent before joining. The routing is re-sent automatically when raw media returns. |
 | `set-feeds` | `mode` (`off`/`ndi`/`srt`), `srtHost`, `srtBasePort` (10000), `srtLatencyMs` (120), `srtPassphrase` | Live feeds of every routed slot to CoreVideo Pro. NDI source `CoreVideo Edge <node> S<n>`; SRT caller to `srtHost:srtBasePort+n-1` (Pro's SRT input listeners). The passphrase is never logged or published. Refused with the reason when the NDI runtime or FFmpeg is missing. |
 | `set-record-format` | `height` (1080 or 720) | 16:9 at that height. Not while recording. The frame rate is per slot (`set-fps`); a non-zero `fps` here is refused. Constant 30/60 snaps every frame to the grid; repeats and skips are counted. |
-| `comms-key` | `slot` (0..15) + `on`, or `all:true` + `on` (ALL CALL) | Talkback: hold a channel's talk key. See [Comms](#comms-zoom-talkback). |
+| `comms-key` | `slot` (0..15) + `on`, or `all:true` + `on` (ALL CALL); optional `leaseMs` (0..60000) | Talkback: hold a channel's talk key. With `leaseMs` the hold drops by itself unless re-sent within that time (re-send while held). See [Comms](#comms-zoom-talkback). |
+| `comms-release-all` | | Every held key and ALL CALL up; latches stay. Never refused. Also sent by the node itself before it quits. |
 | `comms-latch` | same two shapes as `comms-key` | Latch a channel (or every channel) keyed. |
 | `comms-assign` | `slot` (0..15), `participantId`, `on` | Put a person on / take them off a talkback channel. |
 | `comms-mic` | `device` (name; `""` = system default) | The station microphone. |
@@ -217,8 +218,20 @@ while something changed; the node publishes it with its normal state cadence.
   `underruns`: pacer ticks with no frame; `sendErrors`: refused sends. Counters
   are what the engine knows, not what reached ears.
 
+A held key ends when the app releases it, when its `leaseMs` runs out, or when
+the node's control client goes away: stdin closing (the app quit or died)
+quits the node, which sends `comms_release_all` and then stops the engine.
+
+**The station's microphone.** Comms opens this node's meeting mic (talkback
+is silent while it is muted) only behind a never-fed virtual mic, so the room
+hears nothing, and only for a capture-only join with the raw-data licence. If
+the virtual mic does not come up within 1.5 s, or is ever dropped, the mic is
+muted at once and stays muted for that meeting (the reason is in `log`,
+`lamps.meetingMic` goes dark). The real microphone is never open to the room.
+
 **Engine lines** (between the node and its engine; apps never send these --
-the node relays): P2E `comms_key {"slot":0..15|"all","on":bool}`,
+the node relays): P2E `comms_key {"slot":0..15|"all","on":bool[,"lease_ms"]}`,
+`comms_release_all {}`,
 `comms_latch` (same), `comms_assign {"slot","participant_id","on"}`,
 `comms_mic {"device"}`, `comms_sidetone_out {"device"}`, `comms_sidetone
 {"on"}`, `comms_tone {"on"}`, `comms_gain {"db"}`; E2P `comms_state` with the

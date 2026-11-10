@@ -293,3 +293,71 @@ TEST(CommsCore, StateCarriesMeasuredMicAndStats) {
   EXPECT_FALSE(s.get("lamps")->get("tx")->asBool(true));
   EXPECT_FALSE(s.get("log")->asArray().empty());
 }
+
+TEST(CommsCore, AHoldLeaseExpiresUnlessRefreshed) {
+  // A control client that stops re-sending (hung) must not leave a live mic
+  // on talent: a leased hold drops by itself; an unleased one does not.
+  Rig r;
+  r.bringUp();
+  r.core.Apply(ParseCommsCommand(R"({"cmd":"comms_key","slot":1,"on":true,"lease_ms":1000})"), r.now);
+  r.core.Apply(ParseCommsCommand(R"({"cmd":"comms_key","slot":2,"on":true})"), r.now);
+  r.tick(600);
+  EXPECT_TRUE(r.bank.key(1));
+  r.core.Apply(ParseCommsCommand(R"({"cmd":"comms_key","slot":1,"on":true,"lease_ms":1000})"), r.now);  // refresh
+  r.tick(600);
+  EXPECT_TRUE(r.bank.key(1));
+  r.tick(600);  // 1.2 s since the refresh
+  EXPECT_FALSE(r.bank.key(1));
+  EXPECT_TRUE(r.bank.key(2));  // unleased holds stay until released
+}
+
+TEST(CommsCore, ReleaseAllDropsHoldsButKeepsLatches) {
+  Rig r;
+  r.bringUp();
+  r.core.Apply(ParseCommsCommand(R"({"cmd":"comms_key","slot":"all","on":true})"), r.now);
+  r.core.Apply(ParseCommsCommand(R"({"cmd":"comms_key","slot":3,"on":true})"), r.now);
+  r.core.Apply(ParseCommsCommand(R"({"cmd":"comms_latch","slot":9,"on":true})"), r.now);
+  EXPECT_EQ(r.core.Apply(ParseCommsCommand(R"({"cmd":"comms_release_all"})"), r.now), std::string());
+  EXPECT_EQ(r.bank.key_mask(), 1u << 9);
+  EXPECT_TRUE(r.audio.talk);  // the latch still talks
+}
+
+TEST(CommsCore, TheMeterAloneDoesNotDriveTheLineAtTenHertz) {
+  struct MovingMeter : StubAudio {
+    double level = -40.0;
+    CommsAudioStatus Status() override {
+      auto s = StubAudio::Status();
+      if (running) s.peak_dbfs = level;
+      return s;
+    }
+  };
+  FakeTalkbackSdk sdk;
+  zc::TalkbackChannels bank{&sdk};
+  MovingMeter audio;
+  CommsBankSink sink;
+  CommsCore core{&audio, &sink};
+  CommsStateEmitter emitter;
+  CommsInputs in;
+  in.in_meeting = in.controller = in.supported = in.host_or_cohost = in.mic_open = true;
+  core.AttachBank(&bank);
+  int64_t now = 1000;
+  in.now_ms = now;
+  core.Tick(in);
+  for (int i = 0; i < 16; ++i) sdk.EmitChannelCreated("guid-" + std::to_string(i));
+  std::string out;
+  int lines = 0;
+  // 2 s of a moving meter and nothing else: at most one line per 250 ms.
+  for (int i = 0; i < 20; ++i) {
+    now += 100;
+    in.now_ms = now;
+    audio.level = -40.0 + (i % 2 ? 3.0 : -3.0);
+    core.Tick(in);
+    if (emitter.Next(core, now, &out)) ++lines;
+  }
+  EXPECT_TRUE(lines <= 9);
+  EXPECT_TRUE(lines >= 4);  // but the meter still moves
+  // A real change goes out at once, whatever the meter did.
+  core.Apply(ParseCommsCommand(R"({"cmd":"comms_key","slot":0,"on":true})"), now);
+  EXPECT_TRUE(emitter.Next(core, now, &out));
+  EXPECT_TRUE(out.find("\"keyed\":true") != std::string::npos);
+}

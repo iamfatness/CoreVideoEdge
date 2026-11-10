@@ -242,7 +242,7 @@ struct State {
   std::unique_ptr<ScriptedTalkback> sdk;
   std::unique_ptr<zc::TalkbackChannels> bank;
   std::string station = "CoreVideo Edge";
-  std::string last_json;
+  edgecomms::CommsStateEmitter emitter;
   std::thread thread;
   std::atomic<bool> quit{false};
 };
@@ -253,10 +253,8 @@ State& S() {
 }
 
 void EmitLocked(State& s) {
-  std::string json = s.core->StateJson();
-  if (json == s.last_json) return;
-  s.last_json = json;
-  EngineIpc::write(json);
+  std::string json;
+  if (s.emitter.Next(*s.core, NowMs(), &json)) EngineIpc::write(json);
 }
 
 void TickLocked(State& s) {
