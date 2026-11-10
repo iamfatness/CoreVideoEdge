@@ -181,6 +181,21 @@ try {
   r = await send('comms-key', { all: true, on: false });
   await waitFor((s) => s.comms.channels.every((c) => !c.keyed), 3000, 'ALL CALL released');
 
+  // Hold lease + release-all: a client that stops talking cannot leave a mic open.
+  r = await send('comms-key', { slot: target, on: true, leaseMs: 800 });
+  check(r.ok, `leased hold on slot ${target}${r.error ? ` (${r.error})` : ''}`);
+  await waitFor((s) => s.comms.channels[target].keyed, 2000, 'leased hold keys the channel');
+  await waitFor((s) => !s.comms.channels[target].keyed, 3000, 'an unrefreshed leased hold drops by itself');
+  r = await send('comms-key', { slot: target, on: true });
+  r = await send('comms-latch', { slot: s1, on: true });
+  await waitFor((s) => s.comms.channels[target].keyed && s.comms.channels[s1].keyed, 2000, 'a hold and a latch both keyed');
+  r = await send('comms-release-all');
+  check(r.ok, 'comms-release-all accepted');
+  await waitFor((s) => !s.comms.channels[target].keyed && s.comms.channels[s1].keyed && s.comms.channels[s1].latched,
+    2000, 'release-all drops the hold, keeps the latch');
+  r = await send('comms-latch', { slot: s1, on: false });
+  await waitFor((s) => s.comms.channels.every((c) => !c.keyed), 2000, 'everything released');
+
   // Gain, sidetone, devices.
   r = await send('comms-gain', { db: 6 });
   await waitFor((s) => s.comms.mic.gainDb === 6, 3000, 'gain +6 dB reported');

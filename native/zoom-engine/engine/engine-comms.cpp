@@ -23,6 +23,7 @@
 #include "comms/comms_protocol.h"
 #include "comms/devices.h"
 #include "comms/engine.h"
+#include "comms/mic_guard.h"
 #include "comms/talkback_channels.h"
 #include "comms/talkback_sdk_win.h"
 
@@ -55,15 +56,24 @@ std::string narrow(const zchar_t *s)
     return out;
 }
 
+void on_silent_mic_dropped();  // below: revoke + mute, immediately
+
 // The auto-suppress: a virtual mic that is installed and never fed. The SDK
 // then treats our meeting mic as open (talkback delivers, law 1) while the
-// room hears nothing. Callbacks are recorded for the ops log only.
+// room hears nothing. `initialised` is what MicGuard's watchdog trusts: no
+// onMicInitialize within the grace window, or an onMicUninitialized, and
+// the mic is muted again at once.
 class SilentMic : public ZOOMSDK::IZoomSDKVirtualAudioMicEvent {
 public:
     void onMicInitialize(ZOOMSDK::IZoomSDKAudioRawDataSender *) override { initialised.store(true); }
     void onMicStartSend() override { sending.store(true); }
     void onMicStopSend() override { sending.store(false); }
-    void onMicUninitialized() override { initialised.store(false); sending.store(false); }
+    void onMicUninitialized() override
+    {
+        initialised.store(false);
+        sending.store(false);
+        on_silent_mic_dropped();
+    }
     std::atomic<bool> initialised{false};
     std::atomic<bool> sending{false};
 };
@@ -102,14 +112,26 @@ public:
         if (!worker_.joinable() && !quit_) worker_ = std::thread([this] { run(); });
     }
 
-    void shutdown()
+    // Bounded: a WASAPI driver that never returns must not turn engine quit
+    // into a hang. False = the worker is still stuck; the caller then leaks
+    // this object on purpose (the thread still references it).
+    bool shutdown(int timeout_ms = 3000)
     {
         {
             std::lock_guard<std::mutex> lock(m_);
             quit_ = true;
         }
         cv_.notify_all();
-        if (worker_.joinable()) worker_.join();
+        if (!worker_.joinable()) return true;
+        {
+            std::unique_lock<std::mutex> lock(m_);
+            if (!done_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this] { return done_; })) {
+                worker_.detach();
+                return false;
+            }
+        }
+        worker_.join();
+        return true;
     }
 
 private:
@@ -199,6 +221,11 @@ private:
             }
         }
         if (engine_) stop_engine();
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            done_ = true;
+        }
+        done_cv_.notify_all();
     }
 
     std::string open_engine(const std::string &mic, const std::string &out, int gain, bool sidetone)
@@ -247,6 +274,8 @@ private:
     std::thread worker_;
     std::mutex m_;
     std::condition_variable cv_;
+    std::condition_variable done_cv_;
+    bool done_ = false;
     bool quit_ = false;
     bool want_running_ = false;
     bool restart_ = false;
@@ -275,17 +304,17 @@ struct State {
     std::unique_ptr<zc::TalkbackChannels> bank;
     std::vector<zc::RosterMember> roster;
     int64_t next_roster_ms = 0;
-    int64_t next_mic_ms = 0;
-    bool silent_mic_installed = false;
-    bool silent_mic_failed = false;
     bool silent_mic_ever = false;  // removed again at shutdown
+    bool capture_only = true;      // from the join line (delta 1)
+    bool pending_end = false;      // a status change arrived mid-tick
+    edgecomms::MicGuard guard;
+    edgecomms::CommsStateEmitter emitter;
     // Adapters are never destroyed while the SDK might still hold them as an
     // event sink: a new meeting's adapter replaces the registration, the old
     // one is parked here until process exit (a few hundred bytes each).
     std::vector<std::unique_ptr<zc::TalkbackSdkWin>> retired;
 
     SilentMic silent_mic;
-    std::string last_json;
 };
 
 State &S()
@@ -294,30 +323,65 @@ State &S()
     return s;
 }
 
-void emit_state(bool force)
+void emit_state()
 {
     auto &s = S();
     if (!s.core) return;
-    std::string json = s.core->StateJson();
-    if (!force && json == s.last_json) return;  // only while changed
-    s.last_json = json;
-    EngineIpc::write(json);
+    std::string json;
+    if (s.emitter.Next(*s.core, now_ms(), &json)) EngineIpc::write(json);
+}
+
+void flush_guard_log()
+{
+    auto &s = S();
+    for (auto &line : s.guard.TakeLog())
+        if (s.core) s.core->Log(line);
+}
+
+// Mute OUR OWN mic (never MuteAudio(0): that mutes the meeting). The engine
+// flag is cleared BEFORE this so capture-only agrees the mic must be closed.
+void mute_self(const char *why)
+{
+    auto &s = S();
+    ZOOMSDK::IMeetingService *svc = s.meeting_svc ? *s.meeting_svc : nullptr;
+    auto *parts = svc ? svc->GetMeetingParticipantsController() : nullptr;
+    auto *me = parts ? parts->GetMySelfUser() : nullptr;
+    auto *audio_ctrl = svc ? svc->GetMeetingAudioController() : nullptr;
+    int code = -1;
+    if (me && audio_ctrl && me->GetUserID() != 0)
+        code = static_cast<int>(audio_ctrl->MuteAudio(me->GetUserID(), true));
+    EngineIpc::write(std::string(R"({"cmd":"debug","stage":"comms_mic_revoked","why":")") + why +
+                     R"(","code":)" + std::to_string(code) + "}");
+}
+
+void revoke_mic(const char *why)
+{
+    g_owns_mic.store(false);  // first: capture-only takes over again
+    mute_self(why);
+    flush_guard_log();
 }
 
 void end_meeting()
 {
     auto &s = S();
-    if (s.core) s.core->DetachBank();  // the sink lets go first
+    s.pending_end = false;
+    g_owns_mic.store(false);
+    s.guard.Reset();
+    s.silent_mic.initialised.store(false);  // a new meeting must re-prove it
+    if (s.core) s.core->DetachBank();  // the sink lets go first: no send after this
     if (s.adapter) {
         s.adapter->SetEvents(nullptr);
         s.retired.push_back(std::move(s.adapter));
     }
     s.bank.reset();
     s.roster.clear();
-    s.next_roster_ms = s.next_mic_ms = 0;
-    s.silent_mic_installed = false;
-    s.silent_mic_failed = false;
-    g_owns_mic.store(false);
+    s.next_roster_ms = 0;
+}
+
+void on_silent_mic_dropped()
+{
+    auto &s = S();
+    if (s.guard.Dropped()) revoke_mic("virtual_mic_uninitialized");
 }
 
 void refresh_roster(ZOOMSDK::IMeetingParticipantsController *parts, unsigned int self_id)
@@ -354,7 +418,7 @@ void tick()
     in.now_ms = now;
     ZOOMSDK::IMeetingService *svc = s.meeting_svc ? *s.meeting_svc : nullptr;
     in.in_meeting = svc && svc->GetMeetingStatus() == ZOOMSDK::MEETING_STATUS_INMEETING;
-    if (!in.in_meeting && (s.bank || s.adapter)) end_meeting();
+    if (!in.in_meeting && (s.bank || s.adapter || s.guard.installed())) end_meeting();
 
     if (in.in_meeting) {
         auto *ctrl = svc->GetMeetingTalkbackController();
@@ -379,49 +443,61 @@ void tick()
         }
         in.roster = s.roster;
 
-        // Law 1: talkback is silent unless our meeting audio is OPEN. Only
-        // once the station can actually run talkback, and only behind the
-        // silent virtual mic.
-        if (in.controller && in.supported && in.host_or_cohost && me) {
-            if (!s.silent_mic_installed && !s.silent_mic_failed) {
-                auto *helper = ZOOMSDK::GetAudioRawdataHelper();
-                const ZOOMSDK::SDKError err =
-                    helper ? helper->setExternalAudioSource(&s.silent_mic) : ZOOMSDK::SDKERR_UNINITIALIZE;
-                if (err == ZOOMSDK::SDKERR_SUCCESS) {
-                    s.silent_mic_installed = true;
-                    s.silent_mic_ever = true;
-                    g_owns_mic.store(true);  // capture-only stops muting us
-                    s.core->Log("meeting mic auto-suppressed (open but silent to the room)");
-                } else {
-                    s.silent_mic_failed = true;
-                    s.core->Log("mic auto-suppress unavailable (setExternalAudioSource " +
-                                std::to_string(static_cast<int>(err)) +
-                                ") -- the meeting mic stays closed so the room never hears this PC; talkback is silent");
-                }
-                EngineIpc::write(R"({"cmd":"debug","stage":"comms_silent_mic","code":)" +
-                                 std::to_string(static_cast<int>(err)) + "}");
-            }
-            if (s.silent_mic_installed && now >= s.next_mic_ms) {
-                s.next_mic_ms = now + 2000;
-                if (me->IsAudioMuted()) {
-                    auto *audio_ctrl = svc->GetMeetingAudioController();
-                    const ZOOMSDK::SDKError err =
-                        audio_ctrl ? audio_ctrl->UnMuteAudio(me->GetUserID()) : ZOOMSDK::SDKERR_UNINITIALIZE;
-                    if (err == ZOOMSDK::SDKERR_SUCCESS)
-                        s.core->Log("meeting mic opened -- talkback delivery needs it");
-                    else
-                        s.core->Log("meeting mic is MUTED (talkback is silent until it opens): UnMuteAudio " +
-                                    std::to_string(static_cast<int>(err)) +
-                                    " -- if the meeting forbids self-unmute, the host must allow it");
-                }
-            }
+        // Law 1: talkback is silent unless our meeting audio is OPEN -- and
+        // the REAL mic must never be open to the room. MicGuard decides;
+        // this only performs (mic_guard.h).
+        edgecomms::MicGuard::In gi;
+        gi.in_meeting = true;
+        gi.can_talkback = in.controller && in.supported && in.host_or_cohost && me;
+        gi.capture_only = s.capture_only;
+        gi.licence = gi.can_talkback && !s.guard.installed() && ZOOMSDK::HasRawdataLicense();
+        gi.initialised = s.silent_mic.initialised.load();
+        gi.self_muted = !me || me->IsAudioMuted();
+        gi.now_ms = now;
+        switch (s.guard.Next(gi)) {
+        case edgecomms::MicGuard::Act::Install: {
+            auto *helper = ZOOMSDK::GetAudioRawdataHelper();
+            const ZOOMSDK::SDKError err =
+                helper ? helper->setExternalAudioSource(&s.silent_mic) : ZOOMSDK::SDKERR_UNINITIALIZE;
+            const bool ok = err == ZOOMSDK::SDKERR_SUCCESS;
+            if (ok) s.silent_mic_ever = true;
+            s.guard.InstallResult(ok, "setExternalAudioSource " + std::to_string(static_cast<int>(err)), now);
+            g_owns_mic.store(s.guard.owns());  // false: nothing is owned before onMicInitialize
+            EngineIpc::write(R"({"cmd":"debug","stage":"comms_silent_mic","code":)" +
+                             std::to_string(static_cast<int>(err)) + "}");
+            break;
         }
+        case edgecomms::MicGuard::Act::Unmute: {
+            // Ownership is only ever taken after onMicInitialize; publish it
+            // before unmuting so capture-only does not fight the unmute.
+            g_owns_mic.store(s.guard.owns());
+            auto *audio_ctrl = svc->GetMeetingAudioController();
+            const ZOOMSDK::SDKError err =
+                audio_ctrl ? audio_ctrl->UnMuteAudio(me->GetUserID()) : ZOOMSDK::SDKERR_UNINITIALIZE;
+            if (err == ZOOMSDK::SDKERR_SUCCESS)
+                s.core->Log("meeting mic opened behind the silent virtual mic -- talkback delivery needs it");
+            else
+                s.core->Log("meeting mic is MUTED (talkback is silent until it opens): UnMuteAudio " +
+                            std::to_string(static_cast<int>(err)) +
+                            " -- if the meeting forbids self-unmute, the host must allow it");
+            break;
+        }
+        case edgecomms::MicGuard::Act::Revoke:
+            revoke_mic("virtual_mic_not_initialised");
+            break;
+        case edgecomms::MicGuard::Act::None:
+            break;
+        }
+        g_owns_mic.store(s.guard.owns());
+        flush_guard_log();
+        in.mic_blocked = s.guard.blocked_reason();
         in.mic_open = me && me->GetAudioJoinType() != ZOOMSDK::AUDIOTYPE_NONE && !me->IsAudioMuted();
     }
 
     s.core->Tick(in);
-    emit_state(false);
+    emit_state();
     s.in_tick = false;
+    if (s.pending_end) end_meeting();
 }
 
 void CALLBACK timer_proc(HWND, UINT, UINT_PTR, DWORD)
@@ -449,6 +525,30 @@ EngineComms &EngineComms::instance()
 
 bool EngineComms::owns_mic() { return g_owns_mic.load(); }
 
+void EngineComms::set_capture_only(bool capture_only) { S().capture_only = capture_only; }
+
+void EngineComms::on_meeting_status(int status)
+{
+    // Synchronous, from onMeetingStatusChanged, BEFORE the engine reacts
+    // (attach() runs enforce_capture_only on INMEETING): a leave + rejoin or
+    // a reconnect that lands back in INMEETING between two 100 ms ticks must
+    // find the mic un-owned, so capture-only mutes it until Comms re-proves
+    // the silent mic for this meeting.
+    // LOCKED/UNLOCKED are notifications while still in the meeting, not
+    // transitions: tearing the bank down on them would re-request 16 channels.
+    if (status == ZOOMSDK::MEETING_STATUS_LOCKED || status == ZOOMSDK::MEETING_STATUS_UNLOCKED) return;
+    auto &s = S();
+    g_owns_mic.store(false);
+    s.guard.Reset();
+    s.silent_mic.initialised.store(false);
+    if (status != ZOOMSDK::MEETING_STATUS_INMEETING) {
+        // Release the bank now: the TX pacer must not reach a controller the
+        // SDK is tearing down.
+        if (s.in_tick) s.pending_end = true;
+        else end_meeting();
+    }
+}
+
 void EngineComms::start(ZOOMSDK::IMeetingService **meeting_svc)
 {
     auto &s = S();
@@ -472,7 +572,7 @@ bool EngineComms::handle_line(const std::string &line)
         const edgecomms::CommsCommand c = edgecomms::ParseCommsCommand(line);
         const std::string refusal = s.core->Apply(c, now_ms());
         if (!refusal.empty()) s.core->Log("refused: " + refusal);
-        emit_state(false);
+        emit_state();
     } catch (...) {
         EngineIpc::write(R"({"cmd":"debug","stage":"comms_command_exception"})");
     }
@@ -486,7 +586,12 @@ void EngineComms::shutdown()
     if (s.timer) KillTimer(nullptr, s.timer);
     s.timer = 0;
     end_meeting();
-    if (s.audio) s.audio->shutdown();  // joins the worker, which stops the pacer
+    // Joins the worker, which stops the TX pacer -- bounded: a stuck driver
+    // is leaked rather than allowed to hang quit (its thread still uses it).
+    if (s.audio && !s.audio->shutdown(3000)) {
+        EngineIpc::write(R"({"cmd":"debug","stage":"comms_audio_shutdown_timeout"})");
+        s.audio.release();
+    }
     if (s.silent_mic_ever) {
         if (auto *helper = ZOOMSDK::GetAudioRawdataHelper()) helper->setExternalAudioSource(nullptr);
     }

@@ -58,3 +58,14 @@ TEST(CommsProtocol, CommsLinesAreRecognisedByTheirCommandNotASubstring) {
   EXPECT_FALSE(IsCommsCommand(R"({"cmd":"quit"})"));
   EXPECT_EQ(ParseCommsCommand(R"({"cmd":"comms_mic","device":"Quit Joiner"})").device, std::string("Quit Joiner"));
 }
+
+TEST(CommsProtocol, ReleaseAllAndHoldLeases) {
+  EXPECT_TRUE(ParseCommsCommand(R"({"cmd":"comms_release_all"})").verb == CommsVerb::ReleaseAll);
+  EXPECT_EQ(ParseCommsCommand(R"({"cmd":"comms_release_all"})").error, std::string());
+  auto c = ParseCommsCommand(R"({"cmd":"comms_key","slot":2,"on":true,"lease_ms":1500})");
+  EXPECT_EQ(c.error, std::string());
+  EXPECT_EQ(c.lease_ms, 1500);
+  EXPECT_EQ(ParseCommsCommand(R"({"cmd":"comms_key","slot":2,"on":true})").lease_ms, 0);
+  EXPECT_FALSE(ParseCommsCommand(R"({"cmd":"comms_key","slot":2,"on":true,"lease_ms":-1})").error.empty());
+  EXPECT_FALSE(ParseCommsCommand(R"({"cmd":"comms_key","slot":2,"on":true,"lease_ms":60001})").error.empty());
+}

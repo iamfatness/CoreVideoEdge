@@ -8,7 +8,10 @@
 // must not key a channel).
 //
 // Verbs (docs/PROTOCOL.md, "Engine comms lines"):
-//   comms_key          {"slot":0..15|"all","on":bool}
+//   comms_key          {"slot":0..15|"all","on":bool[,"lease_ms":0..60000]}
+//                      lease_ms > 0: the hold expires unless re-sent within it
+//                      (a hung control client cannot leave a mic open)
+//   comms_release_all  {}  every HELD key and ALL CALL up (latches stay)
 //   comms_latch        {"slot":0..15|"all","on":bool}
 //   comms_assign       {"slot":0..15,"participant_id":uint,"on":bool}
 //   comms_mic          {"device":string}            ("" = system default)
@@ -24,7 +27,7 @@
 
 namespace edgecomms {
 
-enum class CommsVerb { None, Key, Latch, Assign, Mic, SidetoneOut, Sidetone, Tone, Gain };
+enum class CommsVerb { None, Key, Latch, Assign, Mic, SidetoneOut, Sidetone, Tone, Gain, ReleaseAll };
 
 struct CommsCommand {
   CommsVerb verb = CommsVerb::None;
@@ -33,6 +36,7 @@ struct CommsCommand {
   uint32_t participant_id = 0;
   std::string device;
   int db = 0;
+  int lease_ms = 0;  // comms_key on: 0 = held until released
   std::string error;  // non-empty: refuse, say this
 };
 
@@ -177,6 +181,7 @@ inline CommsCommand ParseCommsCommand(const std::string& line) {
   else if (name == "comms_sidetone") c.verb = CommsVerb::Sidetone;
   else if (name == "comms_tone") c.verb = CommsVerb::Tone;
   else if (name == "comms_gain") c.verb = CommsVerb::Gain;
+  else if (name == "comms_release_all") c.verb = CommsVerb::ReleaseAll;
   else {
     c.error = "unknown comms command '" + name + "'";
     return c;
@@ -202,9 +207,18 @@ inline CommsCommand ParseCommsCommand(const std::string& line) {
 
   switch (c.verb) {
     case CommsVerb::Key:
-    case CommsVerb::Latch:
+    case CommsVerb::Latch: {
       need_slot(true);
       if (c.error.empty()) need_on();
+      long long lease = 0;
+      const Field lf = ReadInt(line, "lease_ms", &lease);
+      if (c.error.empty() && c.verb == CommsVerb::Key && lf != Field::Missing) {
+        if (lf != Field::Ok || lease < 0 || lease > 60000) c.error = name + ": \"lease_ms\" must be 0..60000";
+        else c.lease_ms = static_cast<int>(lease);
+      }
+      break;
+    }
+    case CommsVerb::ReleaseAll:
       break;
     case CommsVerb::Assign: {
       need_slot(false);

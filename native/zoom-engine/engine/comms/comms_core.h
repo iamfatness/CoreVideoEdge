@@ -108,6 +108,9 @@ struct CommsInputs {
   bool supported = false;       // IsMeetingSupportTalkBack()
   bool host_or_cohost = false;  // this station's role
   bool mic_open = false;        // our meeting audio is joined AND unmuted (law 1)
+  // Non-empty: talkback would be silent because the mic rule keeps our
+  // meeting mic closed (MicGuard::blocked_reason). Becomes the reason.
+  std::string mic_blocked;
   std::vector<zc::RosterMember> roster;  // everyone except this station
   int64_t now_ms = 0;
 };
@@ -135,12 +138,15 @@ class CommsCore {
   std::string Apply(const CommsCommand& c, int64_t now_ms);
 
   // The E2P comms_state line (docs/PROTOCOL.md). Pure function of the last
-  // Tick's inputs, the bank and the audio status.
-  std::string StateJson() const;
+  // Tick's inputs, the bank and the audio status. with_peak=false renders
+  // mic.peak_dbfs as null: the emitter's "did anything but the meter move".
+  std::string StateJson(bool with_peak = true) const;
 
   bool available() const { return available_; }
   const std::string& reason() const { return reason_; }
   uint32_t keys() const { return applied_keys_; }
+  // Every HELD key and ALL CALL up; latches stay (they are deliberate).
+  void ReleaseHolds();
   void Log(const std::string& line);
 
  private:
@@ -186,6 +192,9 @@ class CommsCore {
   uint32_t latch_mask_ = 0;
   uint32_t hold_mask_ = 0;
   bool hold_all_ = false;
+  // Hold leases: 0 = held until released; otherwise the steady-clock ms at
+  // which the hold drops unless the key is re-sent. [16] = ALL CALL.
+  int64_t hold_until_ms_[kSlots + 1] = {};
   uint32_t applied_keys_ = 0;
   uint32_t prev_keys_ = 0;
 
@@ -195,6 +204,21 @@ class CommsCore {
   std::string last_audio_error_;
 
   std::deque<std::string> log_;  // latest last, capped
+};
+
+// Decides when a comms_state line goes out: on any change, except that a
+// change in the meter alone goes out at most every kMeterMs (a live mic would
+// otherwise drive the line at the full 10 Hz tick).
+class CommsStateEmitter {
+ public:
+  static constexpr int64_t kMeterMs = 250;
+  // True with *out filled when a line should be written now.
+  bool Next(const CommsCore& core, int64_t now_ms, std::string* out);
+
+ private:
+  std::string last_shape_;
+  std::string last_full_;
+  int64_t last_emit_ms_ = 0;
 };
 
 }  // namespace edgecomms

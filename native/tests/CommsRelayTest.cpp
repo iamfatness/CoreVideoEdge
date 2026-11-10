@@ -105,3 +105,16 @@ TEST(CommsRelay, AssigningAWebClientParticipantSaysWhy) {
   EXPECT_EQ(buildCommsEngineLine("comms-assign", parse(R"({"slot":4,"participantId":999,"on":false})"), true, &comms).error,
             std::string());
 }
+
+TEST(CommsRelay, HoldLeaseAndReleaseAll) {
+  const Json comms = availableComms();
+  auto r = buildCommsEngineLine("comms-key", parse(R"({"slot":1,"on":true,"leaseMs":1500})"), true, &comms);
+  EXPECT_EQ(r.engineLine, std::string(R"({"cmd":"comms_key","lease_ms":1500,"on":true,"slot":1})"));
+  r = buildCommsEngineLine("comms-key", parse(R"({"slot":1,"on":true,"leaseMs":-5})"), true, &comms);
+  EXPECT_FALSE(r.error.empty());
+  r = buildCommsEngineLine("comms-latch", parse(R"({"slot":1,"on":true,"leaseMs":1500})"), true, &comms);
+  EXPECT_FALSE(r.error.empty());  // a latch is deliberate: no lease
+  r = buildCommsEngineLine("comms-release-all", parse(R"({})"), false, nullptr);
+  EXPECT_EQ(r.error, std::string());  // never refused
+  EXPECT_EQ(r.engineLine, std::string(R"({"cmd":"comms_release_all"})"));
+}

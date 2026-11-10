@@ -138,6 +138,7 @@ void CommsCore::DetachBank() {
   announced_up_ = false;
   latch_mask_ = hold_mask_ = 0;
   hold_all_ = false;
+  for (auto& t : hold_until_ms_) t = 0;
   applied_keys_ = prev_keys_ = 0;
   last_ready_ = 0;
   last_ready_change_ms_ = 0;
@@ -204,6 +205,11 @@ void CommsCore::Tick(const CommsInputs& in) {
       eligible_ = true;  // still retrying in the background
       available_ = false;
       reason_ = "Zoom refused talkback: " + create_error_;
+    } else if (!in.mic_blocked.empty()) {
+      // Channels may be fine, but nothing keyed would be heard: say so
+      // instead of offering keys that deliver silence.
+      available_ = false;
+      reason_ = in.mic_blocked;
     } else {
       available_ = true;
     }
@@ -239,9 +245,28 @@ void CommsCore::Tick(const CommsInputs& in) {
       Heal();
     }
   }
+  // Expired hold leases: a control client that stopped re-sending (hung,
+  // crashed without closing its pipe) must not leave a live mic on talent.
+  for (int s = 0; s <= kSlots; ++s) {
+    const bool held = s == kSlots ? hold_all_ : ((hold_mask_ >> s) & 1u) != 0;
+    if (!held || hold_until_ms_[s] == 0 || in.now_ms < hold_until_ms_[s]) continue;
+    hold_until_ms_[s] = 0;
+    if (s == kSlots) hold_all_ = false;
+    else hold_mask_ &= ~(1u << s);
+    Log((s == kSlots ? std::string("ALL CALL") : ChannelName(s)) + " released: its hold was not refreshed");
+  }
   ApplyKeys();
   Duck();
   NoticeSends();
+}
+
+void CommsCore::ReleaseHolds() {
+  if (hold_mask_ == 0 && !hold_all_) return;
+  hold_mask_ = 0;
+  hold_all_ = false;
+  for (auto& t : hold_until_ms_) t = 0;
+  Log("every held key released");
+  ApplyKeys();
 }
 
 void CommsCore::Housekeeping() {
@@ -417,7 +442,6 @@ void CommsCore::NoticeSends() {
 }
 
 std::string CommsCore::Apply(const CommsCommand& c, int64_t now_ms) {
-  (void)now_ms;
   if (!c.error.empty()) return c.error;
   const auto unavailable = [&]() { return "Comms is not available: " + reason_; };
   switch (c.verb) {
@@ -426,6 +450,7 @@ std::string CommsCore::Apply(const CommsCommand& c, int64_t now_ms) {
       if (c.slot < 0) hold_all_ = c.on;
       else if (c.on) hold_mask_ |= 1u << c.slot;
       else hold_mask_ &= ~(1u << c.slot);
+      hold_until_ms_[c.slot < 0 ? kSlots : c.slot] = (c.on && c.lease_ms > 0) ? now_ms + c.lease_ms : 0;
       ApplyKeys();  // PTT must not wait for the next tick
       return {};
     case CommsVerb::Latch:
@@ -482,12 +507,15 @@ std::string CommsCore::Apply(const CommsCommand& c, int64_t now_ms) {
     case CommsVerb::Gain:
       if (audio_) audio_->SetGain(c.db);
       return {};
+    case CommsVerb::ReleaseAll:
+      ReleaseHolds();
+      return {};
     case CommsVerb::None: break;
   }
   return "unknown comms command";
 }
 
-std::string CommsCore::StateJson() const {
+std::string CommsCore::StateJson(bool with_peak) const {
   const std::vector<zc::ChannelState> snap = bank_ != nullptr ? bank_->Snapshot() : std::vector<zc::ChannelState>{};
   std::map<unsigned int, std::string> names;  // eligible people only
   for (const zc::RosterMember& m : in_.roster)
@@ -560,7 +588,7 @@ std::string CommsCore::StateJson() const {
 
   const CommsAudioStatus& a = audio_status_;
   std::string peak = "null";
-  if (a.peak_dbfs) peak = std::to_string(static_cast<int>(std::lround(*a.peak_dbfs)));
+  if (with_peak && a.peak_dbfs) peak = std::to_string(static_cast<int>(std::lround(*a.peak_dbfs)));
   std::string mic = "{\"device\":" + Quoted(a.device) + ",\"devices\":" + StringArray(a.devices) +
                     ",\"peak_dbfs\":" + peak + ",\"gain_db\":" + std::to_string(a.gain_db) +
                     ",\"sidetone\":" + Bool(a.sidetone) + ",\"sidetone_device\":" + Quoted(a.sidetone_device) +
@@ -587,6 +615,18 @@ std::string CommsCore::StateJson() const {
                     ",\"channel\":" + Bool(any_ready) + ",\"tx\":" + Bool(tx) + "},\"room\":null,\"channels\":" + ch +
                     ",\"roster\":" + roster + ",\"mic\":" + mic + ",\"stats\":" + stats + ",\"log\":" + log + "}";
   return out;
+}
+
+bool CommsStateEmitter::Next(const CommsCore& core, int64_t now_ms, std::string* out) {
+  std::string full = core.StateJson(true);
+  if (full == last_full_) return false;
+  std::string shape = core.StateJson(false);
+  if (shape == last_shape_ && now_ms - last_emit_ms_ < kMeterMs) return false;  // meter only: wait
+  last_shape_ = std::move(shape);
+  last_full_ = full;
+  last_emit_ms_ = now_ms;
+  *out = std::move(full);
+  return true;
 }
 
 }  // namespace edgecomms

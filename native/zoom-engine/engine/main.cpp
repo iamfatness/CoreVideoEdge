@@ -1182,6 +1182,8 @@ public:
 #endif
 
     void onMeetingStatusChanged(ZOOMSDK::MeetingStatus status, int iResult) override {
+        // Delta 7: before anything below (attach() enforces capture-only).
+        EngineComms::instance().on_meeting_status(static_cast<int>(status));
         EngineIpc::write(R"({"cmd":"debug","stage":"meeting_status","status":)" +
             std::to_string(static_cast<int>(status)) +
             R"(,"result":)" + std::to_string(iResult) + "}");
@@ -1582,6 +1584,7 @@ int main(int argc, char **argv)
             const bool capture_only =
                 line.find("\"capture_only\":true") != std::string::npos;
             participants.set_capture_only(capture_only);
+            EngineComms::instance().set_capture_only(capture_only);  // delta 7
             if (display_name.empty()) display_name = "CoreVideo Pro";
             EngineIpc::write(R"({"cmd":"debug","stage":"join_received","meeting_id":")" +
                 json_escape(meeting_id) + R"(","capture_only":)" +

@@ -108,6 +108,10 @@ int EdgeController::run() {
     publishState();
   }
   if (session_.active()) stopTake("Edge is shutting down.");
+  // The control client is gone (quit, or stdin closed because the app died):
+  // nobody can release a held talk key any more. Release them before the
+  // engine is asked to quit (it tears talkback down anyway; this is first).
+  if (engine_.running()) (void)engine_.send(R"({"cmd":"comms_release_all"})");
   engine_.stop();
   publishState(true);
   return 0;

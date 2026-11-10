@@ -69,6 +69,7 @@ target_link_libraries(corevideo-edge-ndi-probe PRIVATE edge_core)
 set(EDGE_COMMS_DIR zoom-engine/engine/comms)
 add_library(edge_comms_core STATIC
   ${EDGE_COMMS_DIR}/comms_core.cpp
+  ${EDGE_COMMS_DIR}/mic_guard.cpp
   ${EDGE_COMMS_DIR}/talkback_sdk.cpp
   ${EDGE_COMMS_DIR}/talkback_channels.cpp
   ${EDGE_COMMS_DIR}/reach.cpp
@@ -149,6 +150,7 @@ add_executable(corevideo-edge-tests
   tests/CommsProtocolTest.cpp
   tests/CommsCoreTest.cpp
   tests/CommsRelayTest.cpp
+  tests/MicGuardTest.cpp
   # ZComms' own tests for the ported pieces (tests/comms/test_util.h maps
   # their ZC_CHECK onto this harness).
   tests/comms/ZCommsPortedTest.cpp

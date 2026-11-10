@@ -19,10 +19,11 @@
 //     the engine joins capture-only with our mic muted (delta 1). When the
 //     station can run talkback it installs a never-fed virtual mic
 //     (setExternalAudioSource -- open but silent to the room, the ZoomISO /
-//     ZComms auto-suppress) and only THEN unmutes us and keeps us unmuted
-//     (re-asserted every 2 s). If the silent mic cannot be installed the
-//     meeting mic is NEVER opened -- the room would hear this PC's mic -- and
-//     the MTG MIC lamp stays dark with the reason in the ops log;
+//     ZComms auto-suppress) and only once Zoom confirms it initialised
+//     (onMicInitialize) unmutes us and keeps us unmuted (re-asserted every
+//     2 s). Without that proof the meeting mic is NEVER opened -- the room
+//     would hear this PC's mic -- and the reason is the comms state reason
+//     (comms/mic_guard decides all of it);
 //   - a comms failure never touches subscriptions, ISO or raw media: no call
 //     here reaches EngineVideo/EngineAudio/EngineShare, and every tick is
 //     exception-fenced.
@@ -49,6 +50,15 @@ public:
     // Capture-only (delta 1) must leave our mic open while this is true: the
     // silent virtual mic is installed, so "open" is silent to the room.
     static bool owns_mic();
+
+    // From the join line: Edge joins capture-only (the virtual mic + unmute
+    // apply). A join that is NOT capture-only (an operator who speaks in the
+    // meeting) keeps its own mic: no virtual mic, no unmute, only a report.
+    void set_capture_only(bool capture_only);
+
+    // From onMeetingStatusChanged, first thing, on EVERY status: drops mic
+    // ownership synchronously and, away from INMEETING, releases the bank.
+    void on_meeting_status(int status);
 
     // Before CleanUPSDK(): stops the timer, releases the bank, joins the
     // audio worker (and with it the TX pacer thread), removes the silent mic.
