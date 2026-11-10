@@ -34,6 +34,7 @@
     <!-- The token dictionary the app ships, contrast-checked pair by pair. -->
     <None Include="..\CoreVideoEdge.Desktop\Theme\Tokens.axaml" Link="Fixtures\Tokens.axaml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\docs\screenshots\fixtures\state-in-meeting.json" Link="Fixtures\state-in-meeting.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\CoreVideoEdge.Desktop\Assets\Fonts\*.ttf" Link="Fixtures\Fonts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\scripts\package-macos-app.sh" Link="Fixtures\package-macos-app.sh" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\docs\screenshots\fixtures\state-recording.json" Link="Fixtures\state-recording.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

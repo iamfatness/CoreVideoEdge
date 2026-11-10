@@ -30,8 +30,8 @@ public partial class MainWindow : Window
             if (Vm is { IsMonitor: true } vm) vm.Monitor.PollPreviews();
         });
         Opened += (_, _) => { _tick.Start(); _preview.Start(); };
-        SizeChanged += (_, e) => { if (Vm is { } vm) vm.CompactHeader = e.NewSize.Width < 1200; };
-        DataContextChanged += (_, _) => { if (Vm is { } vm) vm.CompactHeader = Width < 1200; };
+        SizeChanged += (_, e) => { if (Vm is { } vm) vm.CompactHeader = e.NewSize.Width < CompactBelow; };
+        DataContextChanged += (_, _) => { if (Vm is { } vm) vm.CompactHeader = Width < CompactBelow; };
 
         KeepRecordingButton.Click += (_, _) => CloseConfirm.IsVisible = false;
         StopAndCloseButton.Click += (_, _) =>
@@ -75,6 +75,11 @@ public partial class MainWindow : Window
     // Left inset that clears the macOS traffic lights (12 + 3 x 14 + 2 x 8 gaps,
     // plus room before the mark); 16 when they are hidden (full screen).
     internal const double MacTrafficLightInset = 80;
+
+    // Below this width the wordmark gives way to the mark (MainViewModel.CompactHeader).
+    // macOS spends MacTrafficLightInset on the traffic lights, so the full
+    // header (with the REC tally) needs that much more room there.
+    internal static double CompactBelow => OperatingSystem.IsMacOS() ? 1360 : 1200;
 
     // macOS: content extends under a transparent title bar, the 48 px header is
     // the title bar (traffic lights at its left), Ctrl shortcuts become Command.

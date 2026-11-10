@@ -169,7 +169,7 @@ public sealed class MainViewModel : ObservableObject
     public bool ScreensVisible => !IsLost;
     public string LostText => _nodeExited ?? (StateAge is TimeSpan age ? $"The Edge node has not answered for {(int)age.TotalSeconds} s." : "");
 
-    // Narrow windows (< 1200 px): the wordmark gives way to the mark, and the
+    // Narrow windows (< 1200 px; 1360 on macOS, MainWindow.CompactBelow): the wordmark gives way to the mark, and the
     // disk pill only shows when it is warning.
     private bool _compact;
     public bool CompactHeader { get => _compact; set { if (Set(ref _compact, value)) Refresh(); } }

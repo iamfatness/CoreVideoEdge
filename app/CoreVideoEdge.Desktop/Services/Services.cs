@@ -90,7 +90,7 @@ public sealed class OsShellServices : IShellServices
     {
         try
         {
-            var root = Path.GetPathRoot(Path.GetFullPath(path));
+            var root = OperatingSystem.IsWindows() ? Path.GetPathRoot(Path.GetFullPath(path)) : MountPoint(path);
             return string.IsNullOrEmpty(root) ? null : new DriveInfo(root).AvailableFreeSpace;
         }
         catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
@@ -103,14 +103,38 @@ public sealed class OsShellServices : IShellServices
     {
         try
         {
+            if (!OperatingSystem.IsWindows()) return UnixVolumeName(MountPoint(path));
             var root = Path.GetPathRoot(Path.GetFullPath(path));
             return string.IsNullOrEmpty(root) ? null : root.TrimEnd('\\', '/');
         }
-        catch (ArgumentException)
+        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
         {
             return null;
         }
     }
+
+    // macOS/Unix: every path's root is "/", so the volume is the deepest mount
+    // point containing the path (a record folder on /Volumes/Media must report
+    // that disk's free space, not the startup disk's).
+    private static string? MountPoint(string path) =>
+        MountPointFor(Path.GetFullPath(path), DriveInfo.GetDrives().Select(d => d.RootDirectory.FullName));
+
+    internal static string? MountPointFor(string fullPath, IEnumerable<string> mounts)
+    {
+        string? best = null;
+        foreach (var m in mounts)
+        {
+            var mount = m.Length > 1 ? m.TrimEnd('/') : m;
+            var inside = mount == "/" || fullPath == mount || fullPath.StartsWith(mount + "/", StringComparison.Ordinal);
+            if (inside && (best is null || mount.Length > best.Length)) best = mount;
+        }
+        return best;
+    }
+
+    // "/Volumes/Media" -> "Media"; the startup disk ("/") gets no name (the text
+    // reads "44 GB free").
+    internal static string? UnixVolumeName(string? mount) =>
+        string.IsNullOrEmpty(mount) || mount == "/" ? null : Path.GetFileName(mount);
 }
 
 public interface IClock

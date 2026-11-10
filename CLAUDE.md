@@ -131,6 +131,16 @@ screenshot after a UI change. Never drive the desktop; use the control API or th
   Cmd+1-4, Help). Quit goes through `OnClosing`: a take is confirmed first.
   Windows is untouched by all of it (guarded by `OperatingSystem.IsMacOS()`).
 - `PlatformTarget` x64 applies only on Windows; mac publishes osx-arm64.
+- **Static fonts only.** macOS (CoreText font manager) ignores the weight axis
+  of an embedded variable font: with `SpaceGrotesk-Variable.ttf` every
+  SemiBold rendered at its Light default on the Mac. `Assets/Fonts` holds
+  static Regular/Medium/SemiBold/Bold instances cut from it (fontTools
+  instancer, names like Plex Mono's); `BundledFontsAreStaticInstances` guards it.
+- **Volumes on macOS:** every path's root is `/`; free space and the volume name
+  come from the deepest mount point (`OsShellServices.MountPointFor`).
+- **Codesign seals everything in Contents/MacOS** as nested code, the managed
+  `.dll`s too: sign every file there (non-Mach-O signatures live in xattrs, so
+  zip with `ditto`).
 
 ## Laws learned here (do not regress)
 

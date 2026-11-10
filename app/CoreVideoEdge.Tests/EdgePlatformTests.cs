@@ -168,6 +168,42 @@ public sealed class EdgePlatformTests
         Assert.Contains("us.iamfatness.corevideo.edge", script);
     }
 
+    // macOS (CoreText font manager) ignores the weight axis of an embedded
+    // variable font, so every SemiBold rendered at the font's default (Light)
+    // there. The app ships static instances only; this keeps it that way.
+    [Fact]
+    public void BundledFontsAreStaticInstances()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Fonts");
+        var fonts = Directory.GetFiles(dir, "*.ttf");
+        Assert.Contains(fonts, f => Path.GetFileName(f) == "SpaceGrotesk-SemiBold.ttf");
+        foreach (var font in fonts)
+        {
+            using var r = new BinaryReader(File.OpenRead(font));
+            r.ReadUInt32();
+            var tables = (r.ReadByte() << 8) | r.ReadByte();
+            r.ReadBytes(6);
+            for (var i = 0; i < tables; ++i)
+            {
+                var tag = System.Text.Encoding.ASCII.GetString(r.ReadBytes(4));
+                r.ReadBytes(12);
+                Assert.False(tag == "fvar", $"{Path.GetFileName(font)} is a variable font");
+            }
+        }
+    }
+
+    [Fact]
+    public void UnixVolumeIsTheDeepestMountPoint()
+    {
+        var mounts = new[] { "/", "/System/Volumes/Data", "/Volumes/Media", "/Volumes/Media Two/" };
+        Assert.Equal("/Volumes/Media", CoreVideoEdge.Desktop.Services.OsShellServices.MountPointFor("/Volumes/Media/EdgeISO", mounts));
+        Assert.Equal("/Volumes/Media Two", CoreVideoEdge.Desktop.Services.OsShellServices.MountPointFor("/Volumes/Media Two/x", mounts));
+        Assert.Equal("/", CoreVideoEdge.Desktop.Services.OsShellServices.MountPointFor("/Volumes/MediaX/x", mounts));
+        Assert.Equal("/", CoreVideoEdge.Desktop.Services.OsShellServices.MountPointFor("/Users/op/Movies", mounts));
+        Assert.Equal("Media", CoreVideoEdge.Desktop.Services.OsShellServices.UnixVolumeName("/Volumes/Media"));
+        Assert.Null(CoreVideoEdge.Desktop.Services.OsShellServices.UnixVolumeName("/"));
+    }
+
     [Fact]
     public void ShortcutsUseCommandOnMacAndCtrlOnWindows()
     {
