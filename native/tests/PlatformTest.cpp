@@ -67,3 +67,40 @@ TEST(ShmReopen, AReaderFollowsARecreatedRegion) {
   shm_region_destroy(reader);
   shm_region_destroy(writer);
 }
+
+// Informational: how long a 5 ms sleep really takes on this machine, plain and
+// inside the recorder's IsoMediaThreadScope. The ISO ring is 4 frames, so the
+// recorder's poll interval eats directly into its margin (the macOS CI runner
+// showed ~30 ms poll gaps where Windows shows ~7 ms).
+#include "edge/IsoEncoder.h"
+#include <algorithm>
+#include <chrono>
+#include <thread>
+#include <vector>
+
+namespace {
+double worstSleepMs(int rounds) {
+  double worst = 0;
+  std::vector<double> all;
+  for (int i = 0; i < rounds; ++i) {
+    const auto t0 = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    worst = std::max(worst, ms);
+    all.push_back(ms);
+  }
+  std::sort(all.begin(), all.end());
+  std::fprintf(stderr, "    median %.2f ms, p95 %.2f ms, worst %.2f ms\n", all[all.size() / 2], all[all.size() * 95 / 100], worst);
+  return worst;
+}
+}  // namespace
+
+TEST(Platform, FiveMillisecondSleepPrecision) {
+  std::fprintf(stderr, "  plain thread:\n");
+  std::thread([] { worstSleepMs(100); }).join();
+  std::fprintf(stderr, "  recorder thread (IsoMediaThreadScope):\n");
+  std::thread([] {
+    IsoMediaThreadScope scope;
+    worstSleepMs(100);
+  }).join();
+}
