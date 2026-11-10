@@ -40,10 +40,15 @@ std::vector<std::filesystem::path> candidates() {
   if (const char* root = std::getenv("NDI_RUNTIME_DIR")) list.push_back(std::filesystem::path(root) / "Processing.NDI.Lib.x64.dll");
   list.emplace_back("Processing.NDI.Lib.x64.dll");  // last: a search-path lookup
 #elif defined(__APPLE__)
-  list.emplace_back("libndi.dylib");
-  list.emplace_back("/usr/local/lib/libndi.dylib");
+  // The NDI installers export NDI_RUNTIME_DIR_V6 / _V5; the SDK and Tools
+  // install libndi.dylib in these folders.
+  for (const char* name : {"NDI_RUNTIME_DIR_V6", "NDI_RUNTIME_DIR_V5", "NDI_RUNTIME_DIR"}) {
+    if (const char* root = std::getenv(name); root && *root) list.push_back(std::filesystem::path(root) / "libndi.dylib");
+  }
   list.emplace_back("/Library/NDI SDK for Apple/lib/macOS/libndi.dylib");
-  if (const char* root = std::getenv("NDI_RUNTIME_DIR")) list.push_back(std::filesystem::path(root) / "libndi.dylib");
+  list.emplace_back("/usr/local/lib/libndi.dylib");
+  list.emplace_back("/opt/homebrew/lib/libndi.dylib");
+  list.emplace_back("libndi.dylib");  // last: the dyld search path
 #else
   list.emplace_back("libndi.so.6");
   list.emplace_back("libndi.so.5");
@@ -70,7 +75,11 @@ const Api* load(std::string& error) {
       if ((lib = open(c))) break;
     }
     if (!lib) {
+#if defined(__APPLE__)
+      loadError = "The NDI runtime is not installed (install NDI Tools or the NDI SDK for Apple, or set NDI_RUNTIME_DIR_V6).";
+#else
       loadError = "The NDI runtime is not installed (install NDI 6 Runtime or NDI Tools, or set NDI_RUNTIME_DIR).";
+#endif
       return;
     }
     bind(api.initialize, lib, "NDIlib_initialize");

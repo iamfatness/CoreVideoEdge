@@ -4,6 +4,7 @@
 #include "edge/FeedSink.h"
 #include "edge/IsoAudioTimeline.h"
 #include "edge/NdiRuntime.h"
+#include "edge/ShmReopen.h"
 #include "edge/SrtFeedSink.h"
 #include "modules/ZoomEngineClient.h"
 
@@ -159,6 +160,7 @@ struct FeedSender::Worker {
     sink->setGuest(spec.guestName, spec.participantId);
     setState("waiting");
     ShmRegion video{}, audio{};
+    ShmWatch videoWatch, audioWatch;  // POSIX: reopen a region the engine re-created
     std::uint32_t lastSeq = 0;
     std::uint64_t audioNext = 0;
     std::vector<std::uint8_t> frame;
@@ -169,6 +171,12 @@ struct FeedSender::Worker {
     std::uint64_t sent = 0, skipped = 0;
     std::int64_t audioFrames = 0;
     while (running.load()) {
+      const auto watchNow = shmWatchNowMs();
+      if (video.ptr && videoWatch.shouldReopen(static_cast<const volatile ShmFrameHeader*>(video.ptr)->sequence, watchNow))
+        shm_region_destroy(video);
+      if (audio.ptr &&
+          audioWatch.shouldReopen(static_cast<const volatile ShmAudioRingHeader*>(audio.ptr)->write_counter, watchNow))
+        shm_region_destroy(audio);
       if (!video.ptr) {
         const auto name = prefix + spec.sourceUuid;
         if (!shm_region_open_read(video, name, i420_region_capacity(kMaxVideoShmYLen)))
@@ -190,7 +198,7 @@ struct FeedSender::Worker {
           std::memcpy(frame.data(), static_cast<const std::uint8_t*>(video.ptr) + sizeof(ShmFrameHeader), frame.size());
           std::atomic_thread_fence(std::memory_order_acquire);
           if (h->sequence == before) {
-            if (lastSeq) skipped += (before - lastSeq) / 2 - 1;  // frames Zoom delivered that we never saw
+            if (lastSeq && before > lastSeq) skipped += (before - lastSeq) / 2 - 1;  // frames Zoom delivered that we never saw
             lastSeq = before;
             sink->video(frame.data(), static_cast<int>(w), static_cast<int>(ht));
             ++sent;

@@ -4,9 +4,14 @@
 #include "rpc/Json.h"
 #include "engine-ipc.h"
 
+#if defined(_WIN32)
 #include <windows.h>
+#else
+#include <cstdlib>
+#endif
 
 #include <chrono>
+#include <thread>
 
 namespace corevideo::edge {
 
@@ -17,7 +22,11 @@ bool EngineSupervisor::start(const std::string& executablePath, Sink sink, std::
   // The fake engine streams EVERY participant unless told not to. Edge never
   // pulls anyone it was not asked to (owner rule), so this is forced off for
   // every child. The real engine ignores the variable.
+#if defined(_WIN32)
   SetEnvironmentVariableA("COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE", "0");
+#else
+  setenv("COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE", "0", 1);
+#endif
 
   client_ = std::make_unique<modules::ZoomEngineProcessClient>();
   modules::ZoomEngineProcessOptions options;
@@ -30,6 +39,7 @@ bool EngineSupervisor::start(const std::string& executablePath, Sink sink, std::
   }
   const auto generation = ++generation_;
   stopping_ = false;
+  readerDone_ = false;
   reader_ = std::thread([this, sink = std::move(sink), generation]() {
     auto* client = client_.get();
     while (true) {
@@ -40,6 +50,7 @@ bool EngineSupervisor::start(const std::string& executablePath, Sink sink, std::
         notice.generation = generation;
         notice.reason = stopping_.load() ? "stopped" : client->lastError();
         sink(std::move(notice));
+        readerDone_ = true;
         return;
       }
       if (line->empty()) continue;
@@ -83,6 +94,7 @@ void EngineSupervisor::stop() {
   (void)client_->sendLine(modules::buildZoomEngineQuitCommand());
   if (reader_.joinable()) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+#if defined(_WIN32)
     HANDLE handle = reader_.native_handle();
     while (WaitForSingleObject(handle, 50) == WAIT_TIMEOUT) {
       if (std::chrono::steady_clock::now() >= deadline) {
@@ -92,6 +104,18 @@ void EngineSupervisor::stop() {
         break;
       }
     }
+#else
+    // POSIX has no CancelSynchronousIo. Killing the engine closes its end of
+    // the socket, which ends the blocked read with EOF.
+    while (!readerDone_.load()) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        core::nativeLogf("[engine] did not exit after quit; terminating\n");
+        client_->terminate();
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+#endif
     reader_.join();
   }
   client_->stop();

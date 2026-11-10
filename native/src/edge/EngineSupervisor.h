@@ -50,6 +50,7 @@ class EngineSupervisor {
   std::unique_ptr<modules::ZoomEngineProcessClient> client_;
   std::thread reader_;
   std::atomic<bool> stopping_{false};
+  std::atomic<bool> readerDone_{false};
   std::uint64_t generation_ = 0;
 };
 

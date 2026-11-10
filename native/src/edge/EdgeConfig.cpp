@@ -7,11 +7,24 @@
 #include <fstream>
 #include <sstream>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
 namespace corevideo::edge {
 
 std::string defaultDisplayName() {
-  const char* host = std::getenv("COMPUTERNAME");
-  return host && *host ? std::string("CoreVideo Edge - ") + host : std::string("CoreVideo Edge");
+  std::string host;
+#if defined(_WIN32)
+  if (const char* name = std::getenv("COMPUTERNAME")) host = name;
+#else
+  char name[256] = {};
+  if (gethostname(name, sizeof(name) - 1) == 0) {
+    host = name;
+    if (const auto dot = host.find('.'); dot != std::string::npos) host.resize(dot);  // "studio-mac.local"
+  }
+#endif
+  return !host.empty() ? std::string("CoreVideo Edge - ") + host : std::string("CoreVideo Edge");
 }
 
 EdgeConfig parseEdgeConfig(const std::string& text, std::vector<std::string>& errors) {

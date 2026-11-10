@@ -1,6 +1,7 @@
 #include "edge/PreviewPublisher.h"
 
 #include "core/BoundedAsyncLog.h"
+#include "edge/ShmReopen.h"
 #include "modules/ZoomEngineClient.h"
 
 #include "engine-ipc.h"
@@ -53,7 +54,7 @@ class MappedFile {
     view_ = static_cast<std::uint8_t*>(MapViewOfFile(mapping_, FILE_MAP_ALL_ACCESS, 0, 0, bytes));
     if (!view_) { close(); return false; }
 #else
-    fd_ = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600);
+    fd_ = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd_ < 0) return false;
     if (ftruncate(fd_, static_cast<off_t>(bytes)) != 0) { close(); return false; }
     void* p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
@@ -109,6 +110,7 @@ struct PreviewPublisher::Slot {
   MappedFile file;
   ShmRegion video{};
   ShmRegion audio{};
+  ShmWatch videoWatch, audioWatch;  // POSIX: reopen a region the engine re-created
   std::uint32_t lastSequence = 0;
   std::uint64_t audioNext = 0;
   bool audioPrimed = false;
@@ -241,6 +243,12 @@ void PreviewPublisher::run() {
     const auto now = steadyMs();
     std::map<int, PreviewMeasure> measures;
     for (auto& [index, slot] : slots_) {
+      if (slot->video.ptr &&
+          slot->videoWatch.shouldReopen(static_cast<const volatile ShmFrameHeader*>(slot->video.ptr)->sequence, now))
+        shm_region_destroy(slot->video);
+      if (slot->audio.ptr &&
+          slot->audioWatch.shouldReopen(static_cast<const volatile ShmAudioRingHeader*>(slot->audio.ptr)->write_counter, now))
+        shm_region_destroy(slot->audio);
       if (!slot->video.ptr) {
         // The real engine allocates every video region at the fixed 1080p
         // capacity; the fake sizes it to the exact frame. Try both.
@@ -282,7 +290,8 @@ void PreviewPublisher::publishSlot(Slot& slot, std::int64_t nowMs) {
         // The engine's sequence advances by 2 per frame (odd while writing), so
         // the delta counts every frame Zoom delivered, not just the ones this
         // 15 Hz preview happened to sample: the fps is the source's.
-        const std::uint32_t delivered = slot.lastSequence ? (before - slot.lastSequence) / 2 : 1;
+        // A lower sequence is a re-created region (POSIX reopen): one frame.
+        const std::uint32_t delivered = slot.lastSequence && before > slot.lastSequence ? (before - slot.lastSequence) / 2 : 1;
         slot.lastSequence = before;
         slot.measure.sourceWidth = w;
         slot.measure.sourceHeight = h;

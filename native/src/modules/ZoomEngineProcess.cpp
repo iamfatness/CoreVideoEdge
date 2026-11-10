@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstring>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -183,6 +184,19 @@ bool ZoomEngineProcessClient::start(const ZoomEngineProcessOptions& options) {
     return false;
   }
   if (pid == 0) {
+    // CoreVideo Edge delta (macOS port): match Windows' CreateProcess with
+    // bInheritHandles=FALSE. stdout belongs to the parent's JSON protocol, so
+    // anything the SDK prints goes to stderr instead; stdin is /dev/null; no
+    // other descriptor (another child's pipe, an SHM mapping) crosses exec.
+    // Only async-signal-safe calls between fork and exec.
+    const int devNull = open("/dev/null", O_RDONLY);
+    if (devNull >= 0) {
+      dup2(devNull, STDIN_FILENO);
+      if (devNull > STDERR_FILENO) close(devNull);
+    }
+    dup2(STDERR_FILENO, STDOUT_FILENO);
+    const long maxFd = sysconf(_SC_OPEN_MAX);
+    for (long fd = STDERR_FILENO + 1; fd < (maxFd > 0 && maxFd < 65536 ? maxFd : 65536); ++fd) close(static_cast<int>(fd));
     if (!instanceToken_.empty()) {
       execl(options.executablePath.c_str(), options.executablePath.c_str(), "--ipc-token",
             instanceToken_.c_str(), static_cast<char*>(nullptr));
