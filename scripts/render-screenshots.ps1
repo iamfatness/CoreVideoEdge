@@ -63,10 +63,10 @@ try {
     @('record-engine-off', 'engine-off', 'record', @('--signed-in')),
     @('record-recording', 'recording', 'record', @('--signed-in')),
     @('record-saved', 'saved', 'record', @('--signed-in')),
-    # Comms states are hand-edited until the fake engine's talkback is captured.
-    @('comms-desk', 'comms.edited', 'comms', @('--signed-in')),
-    @('comms-edit-settings', 'comms.edited', 'comms', @('--signed-in', '--comms-edit', '--comms-settings')),
-    @('comms-not-host', 'comms-not-host.edited', 'comms', @('--signed-in')),
+    # Comms states: node scripts\capture-comms-fixtures.mjs (fake engine talkback).
+    @('comms-desk', 'comms', 'comms', @('--signed-in')),
+    @('comms-edit-settings', 'comms', 'comms', @('--signed-in', '--comms-edit', '--comms-settings')),
+    @('comms-not-host', 'comms-not-host', 'comms', @('--signed-in')),
     @('comms-not-joined', 'idle', 'comms', @('--signed-in'))
   )
   foreach ($s in $shots) {
