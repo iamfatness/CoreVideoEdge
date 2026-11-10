@@ -41,7 +41,7 @@ jobs:
       - name: Configure
         run: cmake -S native -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build
-        run: cmake --build build/mac
+        run: cmake --build build/mac -- -k 0
       - name: Native tests
         run: build/mac/corevideo-edge-tests
       - name: Binary names and engine path contract
@@ -93,7 +93,7 @@ jobs:
       - name: Configure
         run: cmake -S native -B build/engine -G Ninja -DCMAKE_BUILD_TYPE=Release -DEDGE_BUILD_ZOOM_ENGINE=ON -DZOOM_SDK_DIR="$ZOOM_SDK_DIR"
       - name: Build
-        run: cmake --build build/engine --target corevideo-zoom-engine corevideo-edge
+        run: cmake --build build/engine --target corevideo-zoom-engine corevideo-edge -- -k 0
       - name: Engine bundle
         run: scripts/make-macos-engine-bundle.sh --build-dir build/engine --zoom-sdk "$ZOOM_SDK_DIR"
       - name: Node finds the bundled engine (build-tree path contract)

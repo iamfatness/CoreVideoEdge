@@ -32,7 +32,11 @@ std::string utcNowIso8601() {
   const auto seconds = std::chrono::system_clock::to_time_t(now);
   const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
   std::tm tm{};
+#if defined(_WIN32)
   gmtime_s(&tm, &seconds);
+#else
+  gmtime_r(&seconds, &tm);
+#endif
   char text[40];
   std::snprintf(text, sizeof(text), "%04d-%02d-%02dT%02d:%02d:%02d.%03lldZ", tm.tm_year + 1900, tm.tm_mon + 1,
                 tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<long long>(millis));
