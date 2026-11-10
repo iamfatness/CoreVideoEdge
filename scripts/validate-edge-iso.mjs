@@ -165,25 +165,38 @@ function audioClaps(file) {
   return times;
 }
 
-// Times (s) of the fake's full-white video frames in an ISO. The fake paints
-// the clap at Y=235 (studio white); a decoded average "> 235" passed on Windows
-// only by encoder overshoot and found no clap at all on VideoToolbox. The
-// fake's normal frames average ~130, so 225 is unambiguous.
+// Times (s) of the fake's full-white video frames in an ISO. The clap frame is
+// one flat Y=235 picture (studio white). A frame is a clap when it is bright
+// AND flat: decoded average > 225 and minimum > 215. The average alone is not
+// enough: the old "> 235" passed on Windows only by encoder overshoot and found
+// no clap on VideoToolbox, and some fake guests' gradients average above 225
+// (base luma up to 199), while every gradient frame's minimum is <= 199.
 function videoClaps(file) {
   const r = spawnSync('ffmpeg', ['-v', 'error', '-i', file, '-an', '-vf',
-    'scale=192:108,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-', '-f', 'null', '-'], {
+    'scale=192:108,signalstats,metadata=print:file=-', '-f', 'null', '-'], {
     encoding: 'utf8', maxBuffer: 1 << 28,
   });
   const times = [];
-  let pts = null;
-  for (const line of (r.stdout ?? '').split(/\r?\n/)) {
-    const p = line.match(/pts_time:([0-9.]+)/);
-    if (p) pts = Number(p[1]);
-    const y = line.match(/YAVG=([0-9.]+)/);
-    if (y && pts !== null && Number(y[1]) > 225) {
+  let pts = null, avg = null, min = null;
+  const flush = () => {
+    if (pts !== null && avg !== null && min !== null && avg > 225 && min > 215) {
       if (!times.length || pts - times[times.length - 1] > 0.5) times.push(pts);
     }
+  };
+  for (const line of (r.stdout ?? '').split(/\r?\n/)) {
+    const p = line.match(/pts_time:([0-9.]+)/);
+    if (p) {
+      flush();
+      pts = Number(p[1]);
+      avg = min = null;
+      continue;
+    }
+    const a = line.match(/signalstats\.YAVG=([0-9.]+)/);
+    if (a) avg = Number(a[1]);
+    const m = line.match(/signalstats\.YMIN=([0-9.]+)/);
+    if (m) min = Number(m[1]);
   }
+  flush();
   return times;
 }
 

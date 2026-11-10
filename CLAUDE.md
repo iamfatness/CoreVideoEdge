@@ -29,6 +29,13 @@ file in the same change as any substantive work.
   input does; used by the validator.
 - `corevideo-zoom-engine.exe` / `-fake.exe` (`native/zoom-engine/`): Pro's
   engine, vendored. I420 + audio rings in shared memory.
+- macOS (2026-11-09, branch `mac-native`): the same processes without `.exe`.
+  The node records with VideoToolbox + AVAssetWriter
+  (`edge/IsoEncoderAVFoundation.mm`; `IsoMp4Writer` keeps every timing rule
+  and only the backend differs). The real engine is the ObjC++
+  `main-macos.mm` and runs only as `corevideo-zoom-engine.app` with the SDK in
+  `Contents/Frameworks`. Node lookup: `<node>/../Helpers/corevideo-zoom-engine.app/Contents/MacOS/corevideo-zoom-engine`,
+  then `<node>/corevideo-zoom-engine.app/...`; fake `<node>/corevideo-zoom-engine-fake`.
 
 ## Laws learned 2026-11-09 (v2 day)
 
@@ -58,11 +65,52 @@ file in the same change as any substantive work.
   scripted edits with backslashes in a file written by the Write tool, or use
   Edit.
 
+## Laws learned 2026-11-09 (macOS port)
+
+- **A POSIX shm region the engine re-creates is a NEW object.** Windows
+  sections are shared by name while any handle is open, so readers never
+  noticed the engine destroying and re-creating a region (unsubscribe,
+  Engine Off, room move). On macOS the old mapping reads the orphan forever.
+  Readers reopen a region whose counter has not moved for 250 ms
+  (`edge/ShmReopen.h`; preview, feeds, ISO rings) and treat a lower counter as
+  a new ring. The mac engine also allocates video regions at the fixed 1080p
+  capacity (Edge E3) so a resolution ramp never re-creates one.
+- **macOS shm names are hashed** (`/ZOP<fnv64>`, PSHMNAMLEN 31) inside
+  `shm_region_create/open_read`; never build a POSIX shm name by hand.
+- **Nothing may block the ISO recorder thread for more than a few frames.**
+  The ring is 4 frames (~130 ms). On the 3-vCPU runner default-QoS recorder
+  threads sat off-CPU for 150 ms, and `VTCompressionSessionEncodeFrame`
+  blocked 150-180 ms when six 1080p encoders fell behind; either way the
+  ring overwrote 1-4 arrivals per file. Recorder threads run at
+  user-interactive QoS, and the mac backend encodes on its own thread from a
+  queue that counts in `videoBacklog()` (as MF's WriteSample queues).
+- **AVAssetWriter does not hold video for a silent audio track** (backlog
+  peak 9, 0 dropped), unlike the MF muxer. `maxVideoBacklog` stays the
+  guarantee on both.
+- **Sub-tick timestamps collapse at 90 kHz.** A preroll at 0 and a frame at
+  100 ns rounded to one PTS and AVAssetWriter refused the append (-16364).
+  The mac backend keeps video PTS strictly increasing in its own timescale.
+- **The fake's clap frame is a flat Y=235.** A decoded average "> 235" only
+  passed on Windows by encoder overshoot, and some fake guests' gradients
+  average above 225. The validator calls a frame a clap when it is bright AND
+  flat (average > 225, minimum > 215).
+- **The node ignores SIGPIPE on POSIX** (a dead app, engine socket or FFmpeg
+  pipe is a write error). FFmpeg children get the default back
+  (`POSIX_SPAWN_SETSIGDEF`); every SRT pipe is close-on-exec and
+  `POSIX_SPAWN_CLOEXEC_DEFAULT` passes the child only its three ends (the
+  handle-inheritance law, POSIX form). The forked engine gets stdout -> stderr
+  (stdout is the node's protocol) and no other descriptor.
+- **Mac compiles and tests only in CI** (`.github/workflows/macos.yml`). Push
+  to `mac-*`, `gh run watch`, `gh run view <id> --log-failed`; the validator log
+  is in the `mac-native-diagnostics` artifact on failure. Never put SDK files
+  in an artifact.
+
 ## Lifted code: keep it lifted
 
 `native/src/modules|core|rpc`, `native/zoom-engine/`, `app/CoreVideoEdge.Core/Lifted`
 and `app/CoreVideoEdge.Tests/Lifted` are CoreVideo Pro main @ `8751b8d2`,
-verbatim, in Pro's paths and namespaces. Engine deltas are listed in
+verbatim, in Pro's paths and namespaces; `native/zoom-engine/engine/main-macos.mm`
+and `scripts/make-macos-engine-bundle.sh` are Pro main @ `219ca1db`. Engine deltas are listed in
 `native/zoom-engine/README.md`; keep that list exact. Edge-only code lives in
 `native/src/edge/` and `app/CoreVideoEdge.Core/*.cs`. When re-syncing from Pro,
 re-copy and re-apply the listed deltas. Do not edit lifted files casually.
@@ -75,7 +123,11 @@ $env:ZOOM_SDK_DIR = 'C:\Users\walla\Downloads\zoom-sdk-windows-7.0.5.39292\zoom-
 node scripts\validate-edge-iso.mjs --sources 6 --seconds 60
 ```
 
-Ninja single-config: `build\bin\*.exe` is always the build you just made. The
+Ninja single-config: `build\bin\*.exe` is always the build you just made.
+macOS (CI, or a Mac): `cmake -S native -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release`,
+binaries at `build/mac/` (no `bin/`); the real engine with
+`-DEDGE_BUILD_ZOOM_ENGINE=ON -DZOOM_SDK_DIR=<dir containing ZoomSDK.framework>`, then
+`scripts/make-macos-engine-bundle.sh --build-dir build/engine`. README has the lot. The
 app renders screens without a window:
 `CoreVideoEdge.exe --screenshot <state.json> <screen> <out.png> [--preview-dir <dir>]`
 (state lines and preview copies from `scripts/capture-ui-fixtures.mjs`; all of
@@ -133,6 +185,12 @@ screenshot after a UI change. Never drive the desktop; use the control API or th
   `EngineSupervisor` forces it off for every child.
 
 ## Not yet verified (be honest about it)
+
+- macOS: the real engine has only been compiled and bundled (CI). Auth, join,
+  capture-only muting, raw data, the ISO ring, breakout moves (does the mac
+  SDK report `Disconnecting/Ended` + `InMeeting` like Windows?) and hardware
+  VideoToolbox encoding under 8 x 1080p are unverified until a live run on
+  the owner's Mac. NDI on macOS is untested (no runtime on the runner).
 
 - Live A/V skew (there is no clap in a real meeting) and long live soaks. A live
   6-ISO 60 s take passed 2026-11-09 (signed-in join, raw data granted, 0 lost).

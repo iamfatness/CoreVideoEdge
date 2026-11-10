@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -204,6 +205,8 @@ class AvIsoEncoder final : public IsoEncoderBackend {
       pendingBlack_ = std::make_shared<AvFrame>(black);
       pendingBlack_->preencoded = probe;
     }
+    encoderStop_ = encoderAbort_ = false;
+    encoderThread_ = std::thread([this] { encodeLoop(); });
     return true;
   }
 
@@ -255,15 +258,19 @@ class AvIsoEncoder final : public IsoEncoderBackend {
       return drain(false, error);
     }
     if (!drain(false, error)) return false;
+    // Queued, never encoded on this thread: VTCompressionSessionEncodeFrame
+    // blocks when the encoder is behind (measured: 150-180 ms stalls with six
+    // 1080p sessions on the CI runner), and a blocked recorder thread lets the
+    // 4-frame ISO ring overwrite arrivals. Media Foundation's WriteSample
+    // queues the same way; the queue counts in videoBacklog() and the writer's
+    // cap refuses frames past it.
     ++submitted_;
-    const OSStatus status = VTCompressionSessionEncodeFrame(session_, av->pixels, CMTimeMake(start, kVideoTimescale),
-                                                            CMTimeMake(ticks, kVideoTimescale), nullptr, nullptr,
-                                                            nullptr);
-    if (status != noErr) {
-      --submitted_;
-      error = osStatus("the H.264 encoder refused a frame", status);
-      return false;
+    {
+      std::lock_guard<std::mutex> lock(jobMutex_);
+      CVPixelBufferRetain(av->pixels);
+      jobs_.push_back({av->pixels, start, ticks});
     }
+    jobCv_.notify_one();
     return true;
   }
 
@@ -329,9 +336,13 @@ class AvIsoEncoder final : public IsoEncoderBackend {
     }
     bool ok = true;
     @autoreleasepool {
-      // End of stream: every submitted frame comes out of VT now (this call
-      // returns after the output callbacks ran), then a bounded drain into
-      // the file.
+      // End of stream: the encode thread hands VT every queued frame, every
+      // submitted frame comes out of VT (CompleteFrames returns after the
+      // output callbacks ran), then a bounded drain into the file.
+      if (!stopEncoder(true) && ok) {
+        ok = false;
+        error = "the H.264 encoder did not take the last frames within 5 s";
+      }
       if (session_) {
         const OSStatus status = VTCompressionSessionCompleteFrames(session_, kCMTimeInvalid);
         if (status != noErr) {
@@ -369,6 +380,7 @@ class AvIsoEncoder final : public IsoEncoderBackend {
 
   void reset() override {
     @autoreleasepool {
+      (void)stopEncoder(false);  // before the session it encodes into goes away
       if (session_) {
         VTCompressionSessionInvalidate(session_);
         CFRelease(session_);
@@ -398,6 +410,62 @@ class AvIsoEncoder final : public IsoEncoderBackend {
   std::string encoderPath() const override { return encoderPath_; }
 
  private:
+  struct EncodeJob {
+    CVPixelBufferRef pixels;  // retained by writeVideo, released after the encode call
+    int64_t start;            // 90 kHz
+    int64_t ticks;
+  };
+
+  // The only caller of VTCompressionSessionEncodeFrame after open().
+  void encodeLoop() {
+    for (;;) {
+      EncodeJob job{};
+      {
+        std::unique_lock<std::mutex> lock(jobMutex_);
+        jobCv_.wait(lock, [&] { return !jobs_.empty() || encoderStop_ || encoderAbort_; });
+        if (encoderAbort_ || (jobs_.empty() && encoderStop_)) return;
+        job = jobs_.front();
+        jobs_.pop_front();
+        encoding_ = true;
+      }
+      const OSStatus status =
+          VTCompressionSessionEncodeFrame(session_, job.pixels, CMTimeMake(job.start, kVideoTimescale),
+                                          CMTimeMake(job.ticks, kVideoTimescale), nullptr, nullptr, nullptr);
+      CVPixelBufferRelease(job.pixels);
+      if (status != noErr) {
+        std::lock_guard<std::mutex> lock(queueMutex_);
+        if (asyncError_.empty()) asyncError_ = osStatus("the H.264 encoder refused a frame", status);
+        ++appended_;  // never reaches the file; keep the backlog honest
+      }
+      {
+        std::lock_guard<std::mutex> lock(jobMutex_);
+        encoding_ = false;
+      }
+      jobCv_.notify_all();
+    }
+  }
+
+  // drainAll: let the thread hand VT every queued frame first (bounded, 5 s).
+  // Otherwise (reset) queued frames are discarded. Returns false on timeout.
+  bool stopEncoder(bool drainAll) {
+    if (!encoderThread_.joinable()) return true;
+    bool ok = true;
+    {
+      std::unique_lock<std::mutex> lock(jobMutex_);
+      if (drainAll) {
+        ok = jobCv_.wait_for(lock, std::chrono::seconds(5), [&] { return jobs_.empty() && !encoding_; });
+      }
+      encoderStop_ = true;
+      if (!drainAll || !ok) encoderAbort_ = true;
+    }
+    jobCv_.notify_all();
+    encoderThread_.join();
+    std::lock_guard<std::mutex> lock(jobMutex_);
+    for (auto& job : jobs_) CVPixelBufferRelease(job.pixels);
+    jobs_.clear();
+    return ok;
+  }
+
   static void onEncoded(void* refcon, void*, OSStatus status, VTEncodeInfoFlags flags, CMSampleBufferRef sample) {
     auto* self = static_cast<AvIsoEncoder*>(refcon);
     std::lock_guard<std::mutex> lock(self->queueMutex_);
@@ -555,6 +623,14 @@ class AvIsoEncoder final : public IsoEncoderBackend {
   std::string asyncError_;
   std::atomic<std::int64_t> submitted_{0};
   std::atomic<std::int64_t> appended_{0};
+
+  std::thread encoderThread_;
+  std::mutex jobMutex_;
+  std::condition_variable jobCv_;
+  std::deque<EncodeJob> jobs_;
+  bool encoding_ = false;
+  bool encoderStop_ = false;
+  bool encoderAbort_ = false;
 };
 
 }  // namespace
