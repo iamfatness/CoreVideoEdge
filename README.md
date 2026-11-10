@@ -175,7 +175,7 @@ The app finds `corevideo-edge.exe` beside itself, then in `build\bin` up the
 tree, or at `COREVIDEO_EDGE_NODE`. Config lives in
 `%LOCALAPPDATA%\CoreVideoEdge\edge.json`; the node log in `edge-node.log`
 beside it; Zoom tokens in `zoom-oauth.json` (DPAPI-encrypted, current user).
-Screens: **Connect**, **Routing**, **Monitor**, **Record** (Ctrl+1-4). The
+Screens: **Connect**, **Routing**, **Monitor**, **Record**, **Comms** (Ctrl+1-5). The
 header always shows the meeting, Engine, Routed n/cap, ISO n/cap, measured disk
 free and the REC tally; failures sit in a banner under it until they clear.
 
@@ -208,6 +208,15 @@ free and the REC tally; failures sit in a banner under it until they clear.
 6. **Record.** Folder, file prefix, 1080p | 720p (the frame rate is per slot, on Routing), then
    **Start recording**. The table shows frames, lost, held, cadence and size per
    ISO. **Stop recording** (confirmed) finalizes every file and the manifest.
+7. **Comms.** Zoom talkback to talent from this node's own participant (the
+   ZComms talkback station, in Edge's look). Hold a person's cell to talk
+   (digits 1-9 key the first nine), **ALL CALL** or Space for everyone,
+   **Latch** to make presses stick, **Edit talent** to put people on any of the
+   16 channels (groups included), **Settings** for microphone, sidetone, test
+   tone and gain. Needs this account to be **host or co-host**, the Zoom SDK
+   7.1.5 engine, and talent on the Zoom desktop/mobile app in the same room
+   (the web client cannot receive talkback). Design:
+   `docs/superpowers/specs/2026-11-09-comms-design.md`.
 
 Screenshots of every screen and state: `docs/screenshots/`. They are rendered
 headlessly (no window) from node state lines captured off the fake engine:

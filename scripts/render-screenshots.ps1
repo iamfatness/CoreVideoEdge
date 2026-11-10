@@ -62,7 +62,12 @@ try {
     @('record-armed', 'in-meeting', 'record', @('--signed-in')),
     @('record-engine-off', 'engine-off', 'record', @('--signed-in')),
     @('record-recording', 'recording', 'record', @('--signed-in')),
-    @('record-saved', 'saved', 'record', @('--signed-in'))
+    @('record-saved', 'saved', 'record', @('--signed-in')),
+    # Comms states are hand-edited until the fake engine's talkback is captured.
+    @('comms-desk', 'comms.edited', 'comms', @('--signed-in')),
+    @('comms-edit-settings', 'comms.edited', 'comms', @('--signed-in', '--comms-edit', '--comms-settings')),
+    @('comms-not-host', 'comms-not-host.edited', 'comms', @('--signed-in')),
+    @('comms-not-joined', 'idle', 'comms', @('--signed-in'))
   )
   foreach ($s in $shots) {
     $name, $state, $screen, $extra = $s

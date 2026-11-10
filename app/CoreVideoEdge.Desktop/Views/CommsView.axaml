@@ -1,0 +1,267 @@
+<!--
+  Comms: Zoom talkback from this node's participant. Structure is the ZComms
+  talkback station (owner 2026-11-09: "use the ZComms screen as the model"):
+  one grid of person cells where a cell IS a talk key, ALL CALL above it,
+  LATCH / EDIT TALENT / SETTINGS / LEAVE below, machine truth in lamps and a
+  one-line ops strip. Look is Edge's: tokens, type, radii.
+-->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CoreVideoEdge.Desktop.ViewModels"
+             xmlns:c="using:CoreVideoEdge.Desktop.Controls"
+             x:Class="CoreVideoEdge.Desktop.Views.CommsView"
+             x:DataType="vm:CommsViewModel"
+             Focusable="True">
+  <UserControl.Styles>
+    <Style Selector="Ellipse.lamp">
+      <Setter Property="Width" Value="8" />
+      <Setter Property="Height" Value="8" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Fill" Value="{StaticResource CtlBorderBrush}" />
+    </Style>
+    <Style Selector="Ellipse.lamp.on">
+      <Setter Property="Fill" Value="{StaticResource LiveBrush}" />
+    </Style>
+    <Style Selector="Ellipse.lamp.accent.on">
+      <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+    </Style>
+    <Style Selector="TextBlock.lamp">
+      <Setter Property="Foreground" Value="{StaticResource TextDisabledBrush}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.lamp.on">
+      <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+    </Style>
+    <Style Selector="Border.seg">
+      <Setter Property="Width" Value="6" />
+      <Setter Property="Height" Value="16" />
+      <Setter Property="Margin" Value="0,0,2,0" />
+      <Setter Property="CornerRadius" Value="1" />
+      <Setter Property="Opacity" Value="0.18" />
+    </Style>
+    <Style Selector="Border.seg.lit">
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto,Auto,Auto">
+    <!-- ================================================= status rail -->
+    <Border Grid.Row="0" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1" Padding="16,10">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+          <TextBlock Classes="section" Text="Talkback" VerticalAlignment="Center" />
+          <TextBlock Classes="mono secondary" Text="{Binding RailText}" VerticalAlignment="Center" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="16" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <StackPanel Orientation="Horizontal" Spacing="6" ToolTip.Tip="In the meeting">
+            <Ellipse Classes="lamp" Classes.on="{Binding LampLink}" />
+            <TextBlock Classes="tag lamp" Classes.on="{Binding LampLink}" Text="LINK" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6"
+                      ToolTip.Tip="This participant's meeting audio is open. Zoom delivers talkback only while it is.">
+            <Ellipse Classes="lamp" Classes.on="{Binding LampMic}" />
+            <TextBlock Classes="tag lamp" Classes.on="{Binding LampMic}" Text="MTG MIC" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6" ToolTip.Tip="At least one talkback channel is ready">
+            <Ellipse Classes="lamp accent" Classes.on="{Binding LampChannel}" />
+            <TextBlock Classes="tag lamp" Classes.on="{Binding LampChannel}" Text="CHANNEL" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6" ToolTip.Tip="Sending to a channel someone is in">
+            <Ellipse Classes="lamp" Classes.on="{Binding LampTx}" />
+            <TextBlock Classes="tag lamp" Classes.on="{Binding LampTx}" Text="TX" />
+          </StackPanel>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- ================================================= desk -->
+    <ScrollViewer Grid.Row="1">
+      <StackPanel Margin="16,20" Spacing="12" MaxWidth="960" HorizontalAlignment="Stretch">
+
+        <StackPanel IsVisible="{Binding NotInMeeting}" Spacing="8" HorizontalAlignment="Center" Margin="0,48,0,0" MaxWidth="480">
+          <TextBlock Classes="section" Text="Not in a meeting" HorizontalAlignment="Center" />
+          <TextBlock Classes="secondary" TextAlignment="Center" TextWrapping="Wrap"
+                     Text="Join from Connect. Talkback comes up once this account is in the meeting as host or co-host." />
+        </StackPanel>
+
+        <StackPanel IsVisible="{Binding Waiting}" Spacing="8" HorizontalAlignment="Center" Margin="0,48,0,0">
+          <TextBlock Classes="secondary" Text="Waiting for the Zoom engine's talkback report…" HorizontalAlignment="Center" />
+        </StackPanel>
+
+        <StackPanel IsVisible="{Binding Unavailable}" Spacing="8" HorizontalAlignment="Center" Margin="0,48,0,0" MaxWidth="520">
+          <c:Icon Width="20" Height="20" HorizontalAlignment="Center" Data="{StaticResource IconAlertCircle}" Foreground="{StaticResource WarnBrush}" />
+          <TextBlock Classes="section" Text="Talkback is not up" HorizontalAlignment="Center" />
+          <TextBlock Text="{Binding UnavailableText}" TextAlignment="Center" TextWrapping="Wrap" />
+          <TextBlock Classes="secondary" TextAlignment="Center" TextWrapping="Wrap" IsVisible="{Binding HostHintVisible}"
+                     Text="Ask the meeting host to make this account host or co-host. Video keeps working meanwhile." />
+        </StackPanel>
+
+        <!-- ALL CALL -->
+        <c:TalkKey Classes="talk allcall" Classes.hot="{Binding AllHot}" Classes.armed="{Binding AllArmed}"
+                   IsVisible="{Binding DeskVisible}" HorizontalAlignment="Stretch"
+                   PressCommand="{Binding AllPressCommand}" ReleaseCommand="{Binding AllReleaseCommand}"
+                   AutomationProperties.Name="{Binding AllText}" ToolTip.Tip="Hold to talk to everyone on a channel (Space)">
+          <TextBlock Classes="tag" FontSize="13" LineHeight="18" LetterSpacing="3" Text="{Binding AllText}" HorizontalAlignment="Center" />
+        </c:TalkKey>
+
+        <TextBlock Classes="secondary" Text="{Binding EmptyDeskText}" IsVisible="{Binding EmptyDeskVisible}" Margin="0,16" HorizontalAlignment="Center" />
+
+        <!-- the grid: a cell IS a key -->
+        <ItemsControl x:Name="CellGrid" ItemsSource="{Binding Cells}" IsVisible="{Binding GridVisible}" Margin="0,0,-8,-8">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><UniformGrid Columns="5" /></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:CommsCellViewModel">
+              <c:TalkKey Classes="talk" Classes.hot="{Binding Hot}" Classes.armed="{Binding Armed}"
+                         Margin="0,0,8,8" HorizontalAlignment="Stretch" IsEnabled="{Binding Enabled}"
+                         CommandParameter="{Binding}"
+                         PressCommand="{Binding $parent[UserControl].((vm:CommsViewModel)DataContext).PressCommand}"
+                         ReleaseCommand="{Binding $parent[UserControl].((vm:CommsViewModel)DataContext).ReleaseCommand}"
+                         AutomationProperties.Name="{Binding AutomationName}">
+                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                  <TextBlock Grid.Column="0" Grid.Row="0" Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"
+                             TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                  <TextBlock Grid.Column="1" Grid.Row="0" Classes="mono state" Text="{Binding KeyHint}" IsVisible="{Binding KeyHintVisible}"
+                             Margin="8,0,0,0" ToolTip.Tip="Digit key" />
+                  <TextBlock Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="1" Classes="mono state" Text="{Binding StateText}"
+                             TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
+                </Grid>
+              </c:TalkKey>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- edit talent: one row per person, one chip per channel -->
+        <Border Classes="panel" IsVisible="{Binding EditVisible}">
+          <StackPanel Spacing="4">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="label" Text="Talent" />
+              <TextBlock Grid.Column="1" Classes="label" Text="Channel: click a number to put someone on it" />
+            </Grid>
+            <ItemsControl ItemsSource="{Binding People}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:CommsPersonViewModel">
+                  <Border BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0" Padding="0,8,0,4">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center" Margin="0,0,12,0">
+                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}"
+                                   Classes.secondary="{Binding NoTalkback}" />
+                        <TextBlock Classes="secondary" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding NoTalkback}"
+                                   Text="{Binding $parent[UserControl].((vm:CommsViewModel)DataContext).PeopleWhy}" />
+                      </StackPanel>
+                      <ItemsControl Grid.Column="1" ItemsSource="{Binding Chips}" IsVisible="{Binding Talkback}" MaxWidth="560">
+                        <ItemsControl.ItemsPanel>
+                          <ItemsPanelTemplate><WrapPanel HorizontalAlignment="Right" /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:CommsChipViewModel">
+                            <Button Classes="chip" Classes.on="{Binding On}" Classes.busy="{Binding Busy}" Content="{Binding Text}"
+                                    Command="{Binding Command}" ToolTip.Tip="{Binding Tip}" AutomationProperties.Name="{Binding Tip}" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <Border Grid.Column="1" Classes="tagbox" Background="{StaticResource SurfaceBrush}" IsVisible="{Binding NoTalkback}">
+                        <TextBlock Classes="tag" Text="NO TALKBACK" Foreground="{StaticResource Text2Brush}" />
+                      </Border>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <TextBlock Classes="secondary" FontSize="12" IsVisible="{Binding DeskVisible}" HorizontalAlignment="Center" TextWrapping="Wrap"
+                   Text="Hold a cell to talk · 1–9 key the first nine · Space = ALL CALL · LATCH makes presses stick" />
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- ================================================= settings drawer -->
+    <Border Grid.Row="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0"
+            Padding="16" IsVisible="{Binding SettingsOpen}">
+      <Grid ColumnDefinitions="*,16,*,16,Auto,16,Auto">
+        <StackPanel Grid.Column="0" Spacing="6">
+          <TextBlock Classes="label" Text="Microphone" />
+          <ComboBox ItemsSource="{Binding Mics}" SelectedItem="{Binding SelectedMic}" HorizontalAlignment="Stretch"
+                    AutomationProperties.Name="Talkback microphone" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Spacing="6">
+          <TextBlock Classes="label" Text="Sidetone output" />
+          <ComboBox ItemsSource="{Binding Outputs}" SelectedItem="{Binding SelectedOutput}" HorizontalAlignment="Stretch"
+                    AutomationProperties.Name="Sidetone output" />
+        </StackPanel>
+        <StackPanel Grid.Column="4" Spacing="6">
+          <TextBlock Classes="label" Text="Processing" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Classes="toggle" Classes.on="{Binding SidetoneOn}" Content="Sidetone" Command="{Binding SidetoneCommand}"
+                    ToolTip.Tip="Hear your own voice in the sidetone output" />
+            <Button Classes="toggle" Classes.on="{Binding ToneOn}" Content="Tone" Command="{Binding ToneCommand}"
+                    ToolTip.Tip="Replace the microphone with a 700 Hz tone through the whole live chain" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <Button Classes="ghost" Content="−" MinWidth="36" Command="{Binding GainDownCommand}" AutomationProperties.Name="Gain down" />
+            <TextBlock Classes="mono" Text="{Binding GainText}" MinWidth="56" TextAlignment="Center" VerticalAlignment="Center" />
+            <Button Classes="ghost" Content="+" MinWidth="36" Command="{Binding GainUpCommand}" AutomationProperties.Name="Gain up" />
+          </StackPanel>
+        </StackPanel>
+        <StackPanel Grid.Column="6" Spacing="2" MinWidth="200">
+          <TextBlock Classes="label" Text="Station" />
+          <Grid ColumnDefinitions="*,Auto"><TextBlock Classes="secondary" Text="Frames sent" /><TextBlock Grid.Column="1" Classes="mono" Text="{Binding FramesSent}" /></Grid>
+          <Grid ColumnDefinitions="*,Auto"><TextBlock Classes="secondary" Text="Channel sends" /><TextBlock Grid.Column="1" Classes="mono" Text="{Binding ChannelSends}" /></Grid>
+          <Grid ColumnDefinitions="*,Auto"><TextBlock Classes="secondary" Text="Underruns" /><TextBlock Grid.Column="1" Classes="mono" Text="{Binding Underruns}" /></Grid>
+          <Grid ColumnDefinitions="*,Auto"><TextBlock Classes="secondary" Text="Send errors" />
+            <TextBlock Grid.Column="1" Classes="mono" Classes.error="{Binding SendErrorsWarn}" Text="{Binding SendErrors}" /></Grid>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ================================================= strip -->
+    <Border Grid.Row="3" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0"
+            Padding="16,10" IsVisible="{Binding DeskVisible}">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="8">
+          <Button Classes="toggle" Classes.on="{Binding LatchMode}" Content="Latch" Command="{Binding ToggleLatchModeCommand}"
+                  ToolTip.Tip="Presses toggle a channel on and off instead of talking while held" />
+          <Button Classes="toggle" Classes.on="{Binding EditMode}" Content="Edit talent" Command="{Binding ToggleEditCommand}" />
+          <Button Classes="toggle" Classes.on="{Binding SettingsOpen}" Content="Settings" Command="{Binding ToggleSettingsCommand}" />
+          <Button Classes="ghost" Content="Leave" Command="{Binding LeaveCommand}" ToolTip.Tip="Leave the meeting (video too)" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="8"
+                    AutomationProperties.Name="{Binding MicLevelName}" ToolTip.Tip="{Binding MicLevelName}">
+          <TextBlock Classes="label" Text="Mic" VerticalAlignment="Center" />
+          <ItemsControl ItemsSource="{Binding Meter}" VerticalAlignment="Center">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:CommsMeterSegment">
+                <Border Classes="seg" Classes.lit="{Binding Lit}"
+                        Background="{Binding Tone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- ================================================= ops strip: latest event, click for history -->
+    <Button Grid.Row="4" Classes="ghost" CornerRadius="0" HorizontalAlignment="Stretch" BorderThickness="0,1,0,0" BorderBrush="{StaticResource HairlineBrush}"
+            HorizontalContentAlignment="Stretch" Padding="16,6" MinHeight="32" Command="{Binding ToggleOpsCommand}"
+            AutomationProperties.Name="Comms event log" ToolTip.Tip="Click for the event history">
+      <StackPanel Spacing="2">
+        <TextBlock Classes="error" Text="{Binding Error}" IsVisible="{Binding ErrorVisible}" TextWrapping="Wrap" FontWeight="Normal" />
+        <TextBlock Classes="mono secondary" Text="{Binding OpsLine}" TextTrimming="CharacterEllipsis" IsVisible="{Binding !OpsOpen}" />
+        <ScrollViewer MaxHeight="180" IsVisible="{Binding OpsOpen}">
+          <ItemsControl ItemsSource="{Binding OpsLines}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <TextBlock Classes="mono secondary" Text="{Binding}" TextWrapping="Wrap" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </StackPanel>
+    </Button>
+  </Grid>
+</UserControl>

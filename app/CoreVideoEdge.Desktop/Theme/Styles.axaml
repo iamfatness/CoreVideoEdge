@@ -362,6 +362,74 @@
     <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
   </Style>
 
+  <!-- ===================================================== comms (talkback) keys
+       ZComms model, Edge look. On air = the Live fill (red stays exclusive to
+       recording); keyed with nobody listening = warn; a toggle that is on =
+       accent tint. A key never looks on air unless the engine says keyed. -->
+  <Style Selector="Button.talk">
+    <Setter Property="MinHeight" Value="64" />
+    <Setter Property="Padding" Value="14,10" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusPanel}" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="Button.talk TextBlock.state">
+    <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+  </Style>
+  <Style Selector="Button.talk.hot, Button.talk.hot:pointerover, Button.talk.hot:pressed">
+    <Setter Property="Background" Value="{StaticResource LiveBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource LiveBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource OnLiveBrush}" />
+  </Style>
+  <Style Selector="Button.talk.hot TextBlock, Button.talk.hot TextBlock.state">
+    <Setter Property="Foreground" Value="{StaticResource OnLiveBrush}" />
+  </Style>
+  <Style Selector="Button.talk.armed, Button.talk.armed:pointerover, Button.talk.armed:pressed">
+    <Setter Property="Background" Value="{StaticResource WarnTintBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource WarnBrush}" />
+  </Style>
+  <Style Selector="Button.talk.armed TextBlock, Button.talk.armed TextBlock.state">
+    <Setter Property="Foreground" Value="{StaticResource WarnBrush}" />
+  </Style>
+  <Style Selector="Button.talk:disabled">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.talk:disabled TextBlock, Button.talk:disabled TextBlock.state">
+    <Setter Property="Foreground" Value="{StaticResource TextDisabledBrush}" />
+  </Style>
+  <Style Selector="Button.talk.allcall">
+    <Setter Property="MinHeight" Value="56" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.toggle.on">
+    <Setter Property="Background" Value="{StaticResource AccentTintBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+  </Style>
+  <Style Selector="Button.chip">
+    <Setter Property="MinHeight" Value="24" />
+    <Setter Property="Height" Value="24" />
+    <Setter Property="MinWidth" Value="28" />
+    <Setter Property="Padding" Value="4,0" />
+    <Setter Property="Margin" Value="0,0,4,4" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusSmall}" />
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource Text2Brush}" />
+  </Style>
+  <Style Selector="Button.chip.busy">
+    <Setter Property="BorderBrush" Value="{StaticResource Text2Brush}" />
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+  </Style>
+  <Style Selector="Button.chip.on, Button.chip.on:pointerover">
+    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+    <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}" />
+  </Style>
+
   <!-- ===================================================== inputs -->
   <Style Selector="TextBox">
     <Setter Property="Background" Value="{StaticResource WellBrush}" />

@@ -14,6 +14,7 @@
     <KeyBinding Gesture="Ctrl+D2" Command="{Binding SelectScreenCommand}" CommandParameter="Routing" />
     <KeyBinding Gesture="Ctrl+D3" Command="{Binding SelectScreenCommand}" CommandParameter="Monitor" />
     <KeyBinding Gesture="Ctrl+D4" Command="{Binding SelectScreenCommand}" CommandParameter="Record" />
+    <KeyBinding Gesture="Ctrl+D5" Command="{Binding SelectScreenCommand}" CommandParameter="Comms" />
     <KeyBinding Gesture="F5" Command="{Binding RetryCommand}" />
     <KeyBinding Gesture="Ctrl+R" Command="{Binding RetryCommand}" />
     <KeyBinding Gesture="Ctrl+Shift+R" Command="{Binding Record.PrimaryCommand}" />
@@ -50,6 +51,11 @@
                   ToolTip.Tip="Ctrl+4">
             <Grid><TextBlock Text="Record" VerticalAlignment="Center" />
               <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsRecord}" /></Grid>
+          </Button>
+          <Button Classes="tab" Classes.active="{Binding IsComms}" Command="{Binding SelectScreenCommand}" CommandParameter="Comms"
+                  ToolTip.Tip="Ctrl+5">
+            <Grid><TextBlock Text="Comms" VerticalAlignment="Center" />
+              <Border Height="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Bottom" Margin="0,0,0,6" IsVisible="{Binding IsComms}" /></Grid>
           </Button>
         </StackPanel>
 
@@ -154,6 +160,7 @@
       <v:RoutingView DataContext="{Binding Routing}" IsVisible="{Binding $parent[Window].((vm:MainViewModel)DataContext).IsRouting}" />
       <v:MonitorView DataContext="{Binding Monitor}" IsVisible="{Binding $parent[Window].((vm:MainViewModel)DataContext).IsMonitor}" />
       <v:RecordView DataContext="{Binding Record}" IsVisible="{Binding $parent[Window].((vm:MainViewModel)DataContext).IsRecord}" />
+      <v:CommsView DataContext="{Binding Comms}" IsVisible="{Binding $parent[Window].((vm:MainViewModel)DataContext).IsComms}" />
       </Grid>
 
       <!-- toast: completed, non-critical events only; never takes focus -->

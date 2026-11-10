@@ -20,6 +20,16 @@ file in the same change as any substantive work.
   rate** (Source / 30 / 60, `set-fps`) for that slot's ISO and SRT feed; the
   Record tab no longer has a rate. Delivered size shows once, under the slot
   header. Monitor tiles scale to fit the window (`MonitorView.BestItemWidth`).
+- 2026-11-09 night (owner): **Comms** — the ZComms talkback station folded
+  into Edge (and Pro next), restyled to each app's look. Spec:
+  `docs/superpowers/specs/2026-11-09-comms-design.md`. App: `CommsView` /
+  `CommsViewModel` (fifth tab, Ctrl+5): a cell IS a talk key (`TalkKey`:
+  press = key down, release/capture-lost = key up, Space/Enter bubble), ALL
+  CALL, Latch, Edit talent (16 chips), Settings drawer, lamps, one-line ops
+  strip; digits 1-9 / Space panel-scoped, released on window deactivate or
+  leaving the tab. Cells/people rebuild only on a structure signature change
+  (ZComms law: rebuilding under a press eats the release). On air = Live
+  fill; red stays exclusive to recording.
 - Still out: compositor, scenes, graphics, program output, streaming, virtual
   camera. Never downgrade resolution automatically to fit more people on one
   node: 1080p unless the operator explicitly picks 720p/360p for a slot.

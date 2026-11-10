@@ -3,7 +3,7 @@ using CoreVideoEdge.Desktop.Services;
 
 namespace CoreVideoEdge.Desktop.ViewModels;
 
-public enum Screen { Connect, Routing, Monitor, Record }
+public enum Screen { Connect, Routing, Monitor, Record, Comms }
 
 // Tone of a pill, tag or line. Colour is never the only signal: every tone is
 // shown with a word, and warn/error also carry an icon.
@@ -20,7 +20,7 @@ public sealed class AppOptions
 }
 
 // The shell: owns the node state, the header status cluster, the failure banner
-// and the four screens. Everything the operator sees is derived from the last
+// and the five screens. Everything the operator sees is derived from the last
 // node state line (measured) or from the OS (disk free), never assumed.
 public sealed class MainViewModel : ObservableObject
 {
@@ -50,6 +50,7 @@ public sealed class MainViewModel : ObservableObject
         Routing = new RoutingViewModel(this);
         Monitor = new MonitorViewModel(this);
         Record = new RecordViewModel(this);
+        Comms = new CommsViewModel(this);
         SelectScreenCommand = new RelayCommand(p =>
         {
             if (p is Screen s) SelectedScreen = s;
@@ -71,6 +72,7 @@ public sealed class MainViewModel : ObservableObject
     public RoutingViewModel Routing { get; }
     public MonitorViewModel Monitor { get; }
     public RecordViewModel Record { get; }
+    public CommsViewModel Comms { get; }
     public ICommand SelectScreenCommand { get; }
     public ICommand RetryCommand { get; }
     public ICommand GoToConnectCommand { get; }
@@ -89,6 +91,8 @@ public sealed class MainViewModel : ObservableObject
             Raise(nameof(IsRouting));
             Raise(nameof(IsMonitor));
             Raise(nameof(IsRecord));
+            Raise(nameof(IsComms));
+            if (value != Screen.Comms) _ = Comms.ReleaseAllAsync();
         }
     }
 
@@ -96,6 +100,7 @@ public sealed class MainViewModel : ObservableObject
     public bool IsRouting => _screen == Screen.Routing;
     public bool IsMonitor => _screen == Screen.Monitor;
     public bool IsRecord => _screen == Screen.Record;
+    public bool IsComms => _screen == Screen.Comms;
 
     // ------------------------------------------------------------ node I/O
 
@@ -119,6 +124,7 @@ public sealed class MainViewModel : ObservableObject
         Routing.Apply(state);
         Monitor.Apply(state);
         Record.Apply(state);
+        Comms.Apply(state);
         Refresh();
     }
 
