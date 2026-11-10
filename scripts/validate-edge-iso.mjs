@@ -52,6 +52,12 @@ const format = args.format ? String(args.format) : '';  // e.g. 720 or 720/30 or
 const formatHeight = format ? Number(format.split('/')[0]) : 1080;
 const formatFps = format && format.includes('/') ? Number(format.split('/')[1]) : 0;  // fake: the first N roster guests never send audio
 const names = args.names ? args.names.split(',').map((s) => s.trim()).filter(Boolean) : [];
+// Fake clap A/V skew limit. 45 ms (just over one frame) on real machines. The
+// fake writes audio on its video tick, so its audio lags by up to one tick
+// plus timer slack; on a VM whose 5 ms sleep takes ~22 ms (macOS CI runner,
+// measured by PlatformTest) that lag is ~90 ms. The writer's own A/V placement
+// is proven exact by the writer unit test, not by this number.
+const maxSkewMs = Number(args['max-skew-ms'] ?? 45);
 
 let silentIds = new Set();
 let sawMovingRooms = false;
@@ -407,7 +413,7 @@ async function main() {
         if (Math.abs(nearest - t) < 0.5) skews.push((nearest - t) * 1000);
       }
       const worst = skews.reduce((m, x) => (Math.abs(x) > Math.abs(m) ? x : m), 0);
-      check(skews.length >= Math.min(v.length, a.length) - 1 && Math.abs(worst) <= 45,
+      check(skews.length >= Math.min(v.length, a.length) - 1 && Math.abs(worst) <= maxSkewMs,
         `${f}: audio vs video clap skew worst ${worst.toFixed(1)} ms over ${skews.length} paired claps (${v.length} video, ${a.length} audio)`);
       firstVideoClap.push(v[0]);
     }

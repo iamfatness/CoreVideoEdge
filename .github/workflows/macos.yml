@@ -58,17 +58,24 @@ jobs:
       # pacing, so "0 lost" and the clap skew flip run to run. The gating runs
       # use four sources; the six-source take runs last and only reports.
       # The six/eight-source proof belongs to a real Mac.
+      # Timers here are coarse: a 5 ms sleep takes ~22 ms (PlatformTest prints
+      # it). The fake paces its audio on its video tick with sleeps, so its
+      # clap audio lands ~90 ms after its clap frame; the writer itself places
+      # A/V exactly (IsoMp4Writer.AWhiteFrameAndABurst... unit test, 0.0 ms).
+      # Hence --max-skew-ms 120 here; real machines keep the 45 ms default.
       - name: Validator (fake engine, control API only)
+        env:
+          SKEW: --max-skew-ms 120
         run: |
           set -e
-          node scripts/validate-edge-iso.mjs --sources 4 --seconds 30
-          node scripts/validate-edge-iso.mjs --sources 4 --seconds 30 --silent 2
-          node scripts/validate-edge-iso.mjs --sources 4 --seconds 30 --room-move
-          node scripts/validate-edge-iso.mjs --sources 4 --seconds 15 --format 720/30 --fps 60
-          node scripts/validate-edge-iso.mjs --sources 3 --seconds 10 --feeds srt
+          node scripts/validate-edge-iso.mjs --sources 4 --seconds 30 $SKEW
+          node scripts/validate-edge-iso.mjs --sources 4 --seconds 30 --silent 2 $SKEW
+          node scripts/validate-edge-iso.mjs --sources 4 --seconds 30 --room-move $SKEW
+          node scripts/validate-edge-iso.mjs --sources 4 --seconds 15 --format 720/30 --fps 60 $SKEW
+          node scripts/validate-edge-iso.mjs --sources 3 --seconds 10 --feeds srt $SKEW
       - name: Validator, six sources (reported, not gating on the 3-vCPU runner)
         continue-on-error: true
-        run: node scripts/validate-edge-iso.mjs --sources 6 --seconds 30 --out build/validate-out-6
+        run: node scripts/validate-edge-iso.mjs --sources 6 --seconds 30 --max-skew-ms 120 --out build/validate-out-6
       - name: Keep failed takes for diagnosis (no SDK content)
         if: failure()
         uses: actions/upload-artifact@v4
