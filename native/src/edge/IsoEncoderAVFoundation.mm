@@ -227,8 +227,12 @@ class AvIsoEncoder final : public IsoEncoderBackend {
       error = "no video frame";
       return false;
     }
-    const int64_t start = toVideoTicks(pts100ns);
+    // Strictly increasing at 90 kHz too: two writer timestamps less than one
+    // 90 kHz tick apart (the t=0 preroll and a frame at 100 ns) would round to
+    // the same PTS, which AVAssetWriter refuses (-16364 live in CI).
+    const int64_t start = std::max(toVideoTicks(pts100ns), lastVideoTicks_ + 1);
     const int64_t ticks = std::max<int64_t>(1, toVideoTicks(pts100ns + duration100ns) - start);
+    lastVideoTicks_ = start;
     if (av->preencoded) {
       CMSampleTimingInfo timing{CMTimeMake(ticks, kVideoTimescale), CMTimeMake(start, kVideoTimescale),
                                 CMTimeMake(start, kVideoTimescale)};
@@ -383,6 +387,7 @@ class AvIsoEncoder final : public IsoEncoderBackend {
       }
       pendingBlack_.reset();
       submitted_ = 0;
+      lastVideoTicks_ = -1;
       appended_ = 0;
     }
   }
@@ -538,6 +543,7 @@ class AvIsoEncoder final : public IsoEncoderBackend {
   AVAssetWriterInput* audioInput_ = nil;
   CMAudioFormatDescriptionRef pcmFormat_ = nullptr;
   bool started_ = false;
+  int64_t lastVideoTicks_ = -1;  // last video PTS handed on, 90 kHz
   std::shared_ptr<AvFrame> pendingBlack_;
   std::string encoderPath_;
 
