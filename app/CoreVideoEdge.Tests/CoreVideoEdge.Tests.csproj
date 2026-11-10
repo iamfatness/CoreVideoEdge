@@ -17,6 +17,13 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
+    <!-- Lifted Pro tests of the Windows DPAPI protector (kept verbatim): DPAPI
+         does not exist off Windows. macOS covers the same contract with
+         KeychainSecretProtectorTests and the [MacOnlyFact] Keychain tests. -->
+    <Compile Remove="Lifted\DpapiSecretProtectorTests.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\CoreVideoEdge.Core\CoreVideoEdge.Core.csproj" />
     <!-- View-model tests (what JSON each operator action sends). -->

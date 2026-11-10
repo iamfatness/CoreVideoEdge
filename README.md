@@ -38,7 +38,7 @@ for v1 (the relay sketched in `SPEC.md` is not implemented).
 | `native/zoom-engine/` | Pro's Zoom engine, vendored (same pattern Pro uses). Edge deltas listed in its README. |
 | `native/src/modules`, `core`, `rpc` | Code lifted from Pro verbatim (engine process/IPC client, PTS clock, frame conform, naming, JSON, logging). |
 | `native/src/edge/` | The node: `corevideo-edge.exe` (supervisor, subscriptions, ISO writer). |
-| `app/` | Operator app `CoreVideoEdge.exe` (Avalonia, `CoreVideoEdge.Desktop`; Windows now, macOS next) + `CoreVideoEdge.Core` (node client, state, preview reader, Pro's lifted OAuth/token-store code) + tests. |
+| `app/` | Operator app `CoreVideoEdge.exe` / `CoreVideo Edge.app` (Avalonia, `CoreVideoEdge.Desktop`; Windows and macOS) + `CoreVideoEdge.Core` (node client, state, preview reader, Pro's lifted OAuth/token-store code) + tests. |
 | `docs/brand/`, `docs/screenshots/` | The Satellite Tile mark and brand note; headless screenshots of every screen and state. |
 | `scripts/` | `build.ps1`, `validate-edge-iso.mjs` (end-to-end check through the control API), `capture-ui-fixtures.mjs` + `render-screenshots.ps1` (UI screenshots from real fake-engine state). |
 | `docs/PROTOCOL.md` | The node's JSON-line control API. |
@@ -211,15 +211,53 @@ node scripts\capture-ui-fixtures.mjs build\bin\corevideo-edge.exe out\captures D
 # one screen: CoreVideoEdge.exe --screenshot <state.json> <connect|routing|monitor|record> <out.png> [--preview-dir <dir>] [--signed-in]
 ```
 
-### macOS (not built yet)
+### macOS (Apple Silicon, macOS 13 or later)
 
-`CoreVideoEdge.Core` and the app target plain `net9.0`. Two seams are
-Windows-only today and fail loudly elsewhere: token protection
-(`EdgeSecretProtection`: DPAPI on Windows; macOS refuses to store tokens until
-the Keychain store is written) and the `corevideo://` registration
-(`IUrlSchemeRegistrar`: HKCU on Windows; on macOS the scheme must be declared in
-the bundle's `Info.plist` `CFBundleURLTypes`, TODO). Reduced motion reads
-`SPI_GETCLIENTAREAANIMATION` on Windows only.
+The Mac app is `CoreVideo Edge.app`, built only in GitHub Actions
+(`.github/workflows/macos.yml`; there is no local Mac build). A bundle that
+contains the Zoom engine also contains the Zoom SDK, so it is stored on the
+repo's **private draft release**, never as a public Actions artifact.
+
+**Install and first run.** Unzip `CoreVideoEdge-mac-<branch>.zip` from the
+private release and drag `CoreVideo Edge.app` to Applications. The app is
+signed ad hoc (no Developer ID certificate and no notarization yet), so
+Gatekeeper refuses a downloaded copy the first time: right-click the app >
+**Open** > Open, or once in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/CoreVideo Edge.app"
+```
+
+- **Sign in** works like Windows: the bundle declares `corevideo://` in its
+  `Info.plist`, and clicking Sign in also makes this app the `corevideo://`
+  handler (on a Mac that also runs CoreVideo Pro, whichever signed in last owns
+  the link). The browser's return reaches the running app directly (no second
+  copy starts).
+- **Tokens** are sealed with a key kept in your login Keychain (item
+  "CoreVideo Edge"). The first sign-in, and the first one after each update
+  (an ad-hoc signature changes with every build), asks for Keychain access:
+  choose **Always Allow**. If Keychain access is refused, sign-in says so; the
+  tokens are never written in plain text.
+- **Local Network**: macOS asks once when feeds to Pro start (NDI/SRT); allow
+  it, or feeds cannot reach Pro.
+- Files: config `~/Library/Application Support/CoreVideoEdge/edge.json`, node
+  log `edge-node.log` beside it. Shortcuts use Command: Cmd+1-4 screens,
+  Cmd+, Settings (the Record screen), Cmd+Shift+R start/stop recording,
+  Cmd+Q quit (asks first while recording).
+- `Contents/Resources/edge-bundle.txt` says what a bundle contains (node and
+  engine present, or MISSING for app-only CI builds).
+
+What the owner must do before distributing beyond the team: enrol in the Apple
+Developer Program, sign with a Developer ID Application certificate using the
+hardened runtime (plus the entitlements the engine needs), notarize with
+`notarytool`, and staple the ticket. Until then, the right-click > Open step
+above is required on every Mac.
+
+Build pieces (macOS runner): `scripts/package-macos-app.sh --node <dir>
+[--engine <corevideo-zoom-engine.app>] --out <dir>`, then
+`scripts/ci/check-macos-app.sh "<dir>/CoreVideo Edge.app"`, and
+`scripts/render-screenshots.sh <app binary> <outDir> [captures]` for the
+Mac-rendered screenshots (artifact `mac-screenshots`).
 
 Headless (no UI), the same node with a config file:
 

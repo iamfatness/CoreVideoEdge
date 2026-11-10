@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Xml.Linq;
 using CoreVideoEdge;
@@ -45,6 +46,7 @@ public sealed class EdgePlatformTests
     }
 
     [MacOnlyFact]
+    [SupportedOSPlatform("macos")]
     public void MacUsesTheKeychain()
     {
         var p = EdgeSecretProtection.ForCurrentPlatform();
@@ -53,6 +55,7 @@ public sealed class EdgePlatformTests
     }
 
     [MacOnlyFact]
+    [SupportedOSPlatform("macos")]
     public void MacKeychainAddReadUpdateDelete()
     {
         var service = $"CoreVideo Edge Tests {Guid.NewGuid():N}";
@@ -75,6 +78,7 @@ public sealed class EdgePlatformTests
     }
 
     [MacOnlyFact]
+    [SupportedOSPlatform("macos")]
     public void MacKeychainKeyStoreBacksTheProtector()
     {
         var service = $"CoreVideo Edge Tests {Guid.NewGuid():N}";
@@ -94,6 +98,7 @@ public sealed class EdgePlatformTests
     }
 
     [MacOnlyFact]
+    [SupportedOSPlatform("macos")]
     public void MacKeychainErrorTextComesFromTheOs()
     {
         Assert.False(string.IsNullOrWhiteSpace(MacKeychain.Describe(MacKeychain.ErrSecItemNotFound)));
@@ -109,6 +114,7 @@ public sealed class EdgePlatformTests
     }
 
     [MacOnlyFact]
+    [SupportedOSPlatform("macos")]
     public void MacRegistrarRefusesOutsideAnAppBundle()
     {
         Assert.False(new MacUrlSchemeRegistrar().TryRegister("corevideo", "/usr/local/bin/CoreVideoEdge", out var error));

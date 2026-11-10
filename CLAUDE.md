@@ -95,8 +95,42 @@ screenshot after a UI change. Never drive the desktop; use the control API or th
   the screens' values are removed (the app polls `state` every second).
 - View models (`ViewModels/`) hold the behaviour and are unit-tested for the
   JSON each action sends (`ViewModelCommandTests`). Views stay thin.
-- Windows-only seams (`EdgePlatform.cs`): DPAPI token protection and the HKCU
-  `corevideo://` registration. macOS: Keychain and `Info.plist` are TODO.
+- Platform seams (`EdgePlatform.cs`): token protection (Windows DPAPI; macOS
+  `KeychainSecretProtector`, AES-256-GCM under a key in the login Keychain) and
+  the `corevideo://` return (Windows HKCU + second-instance pipe; macOS
+  `Info.plist` CFBundleURLTypes + Launch Services, delivered as an Apple Event).
+  Every callback enters through `App.Callbacks` (`OAuthCallbackInbox`).
+
+## macOS app (branch mac-app; Apple Silicon, macOS 13+)
+
+- No local Mac: every Mac build/test/package runs in `.github/workflows/macos.yml`.
+  Job `app-only` is the fast loop (no engine, node optional): .NET tests (the
+  `[MacOnlyFact]` Keychain tests run for real there), `package-macos-app.sh`,
+  `ci/check-macos-app.sh`, `render-screenshots.sh` -> artifact `mac-screenshots`.
+  `workflow_dispatch` with `app_only` skips the native/engine/full-app jobs.
+- Bundle: `CoreVideo Edge.app/Contents/MacOS/{CoreVideoEdge (self-contained
+  .NET), corevideo-edge, corevideo-edge-ndi-probe}`,
+  `Contents/Helpers/corevideo-zoom-engine.app` (the node finds it at
+  `<nodeDir>/../Helpers/...`), `Resources/CoreVideoEdge.icns` (rendered by the
+  app itself: `--render-brand` writes `icon-mac-1024.png` on Apple's 824/1024
+  grid), `Resources/edge-bundle.txt` (what is in it: node/engine present or
+  MISSING). Bundle id `us.iamfatness.corevideo.edge`; version = the csproj.
+- A bundle with the engine contains the Zoom SDK: private draft release only
+  (`ci/upload-private-asset.sh`), never an Actions artifact. Screenshots are
+  fine (fixture/fake state, no SDK content).
+- Signing is ad hoc, inside out (Mach-Os in MacOS first so the app can render
+  its icon, then the engine bundle only if its own signature is broken, then
+  the bundle). No Developer ID/notarization yet: first open is right-click >
+  Open or `xattr -dr com.apple.quarantine`. An ad-hoc re-sign changes the code
+  identity, so after an update macOS asks again for the Keychain key ("Always
+  Allow").
+- Mac feel: title bar extended into the 48 px header (traffic lights, left
+  inset `MacTrafficLightInset`, header drags the window), Ctrl gestures become
+  Command (`Shortcuts.ForPlatform`, tooltips `Shortcuts.*`), `MacMenus` (About,
+  Settings = Record screen with Cmd+comma, Quit via Avalonia's app menu, View
+  Cmd+1-4, Help). Quit goes through `OnClosing`: a take is confirmed first.
+  Windows is untouched by all of it (guarded by `OperatingSystem.IsMacOS()`).
+- `PlatformTarget` x64 applies only on Windows; mac publishes osx-arm64.
 
 ## Laws learned here (do not regress)
 
@@ -133,6 +167,14 @@ screenshot after a UI change. Never drive the desktop; use the control API or th
   `EngineSupervisor` forces it off for every child.
 
 ## Not yet verified (be honest about it)
+
+- macOS, needs a real Mac: the Keychain prompt and "Always Allow" flow, the
+  corevideo:// round trip from the browser (Apple Event while running and on a
+  cold launch), Launch Services default-handler switching against CoreVideo
+  Pro, Gatekeeper first-open, traffic-light placement in the 48 px header, the
+  menu bar, and the Local Network prompt for NDI/SRT. CI proves the bundle
+  builds, signs, maps corevideo:// in Launch Services, runs headless, and that
+  SecItem add/read/update/delete works on the runner.
 
 - Live A/V skew (there is no clap in a real meeting) and long live soaks. A live
   6-ISO 60 s take passed 2026-11-09 (signed-in join, raw data granted, 0 lost).
