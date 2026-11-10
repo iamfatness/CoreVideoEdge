@@ -127,7 +127,7 @@ public sealed class CommsViewModelTests
         await vm.ReleaseAsync(ann); // and a second up nothing
         Assert.Equal(new[]
         {
-            """{"cmd":"comms-key","slot":0,"on":true}""",
+            """{"cmd":"comms-key","slot":0,"on":true,"leaseMs":1500}""",
             """{"cmd":"comms-key","slot":0,"on":false}""",
         }, node.Sent);
         Assert.False(ann.Hot); // the node has not said keyed
@@ -169,7 +169,7 @@ public sealed class CommsViewModelTests
         await vm.AllReleaseAsync();
         Assert.Equal(new[]
         {
-            """{"cmd":"comms-key","all":true,"on":true}""",
+            """{"cmd":"comms-key","all":true,"on":true,"leaseMs":1500}""",
             """{"cmd":"comms-key","all":true,"on":false}""",
         }, node.Sent);
     }
@@ -195,6 +195,39 @@ public sealed class CommsViewModelTests
         main.SelectedScreen = Screen.Routing;
         await vm.LastSend;
         Assert.Equal("""{"cmd":"comms-key","slot":1,"on":false}""", node.Sent[^1]);
+    }
+
+    [Fact]
+    public async Task AHeldKeyRenewsItsLeaseAndAReleasedOneDoesNot()
+    {
+        var (vm, main, node) = Make(State(Two, People));
+        var clock = (FixedClock)main.Clock;
+        await vm.PressAsync(vm.Cells[0]);
+        clock.Now += TimeSpan.FromMilliseconds(250);
+        main.Tick();                                   // too soon: no renewal
+        clock.Now += TimeSpan.FromMilliseconds(300);
+        main.Tick();                                   // 550 ms: renewed
+        await vm.LastSend;
+        await vm.ReleaseAsync(vm.Cells[0]);
+        clock.Now += TimeSpan.FromSeconds(1);
+        main.Tick();                                   // released: nothing more
+        Assert.Equal(new[]
+        {
+            """{"cmd":"comms-key","slot":0,"on":true,"leaseMs":1500}""",
+            """{"cmd":"comms-key","slot":0,"on":true,"leaseMs":1500}""",
+            """{"cmd":"comms-key","slot":0,"on":false}""",
+        }, node.Sent);
+    }
+
+    [Fact]
+    public async Task LatchedChannelsAreNotLeased()
+    {
+        var (vm, main, node) = Make(State(Two, People));
+        vm.LatchMode = true;
+        await vm.PressAsync(vm.Cells[0]);
+        ((FixedClock)main.Clock).Now += TimeSpan.FromSeconds(2);
+        main.Tick();
+        Assert.Equal(new[] { """{"cmd":"comms-latch","slot":0,"on":true}""" }, node.Sent);
     }
 
     [Fact]

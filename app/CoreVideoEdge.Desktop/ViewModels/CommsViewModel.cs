@@ -58,6 +58,12 @@ public sealed class CommsMeterSegment : ObservableObject
 public sealed class CommsViewModel : ObservableObject
 {
     public const int MeterSegments = 12;
+    // A held key is leased: the engine drops it unless re-sent within LeaseMs,
+    // so a hung app can never leave the mic open to talent (docs/PROTOCOL.md
+    // comms-key leaseMs). Tick re-sends every RenewEvery while held.
+    public const int LeaseMs = 1500;
+    public static readonly TimeSpan RenewEvery = TimeSpan.FromMilliseconds(500);
+    private TimeSpan _lastRenew;
     private const string WebClientWhy = "On the Zoom web client. Ask them to rejoin in the Zoom desktop app.";
 
     private readonly MainViewModel _main;
@@ -342,7 +348,8 @@ public sealed class CommsViewModel : ObservableObject
         if (_latchMode) return SendAsync("comms-latch", new { slot = cell.Slot, on = !(ch?.Latched ?? false) });
         if (cell.Held) return Task.CompletedTask;
         cell.Held = true;
-        return SendAsync("comms-key", new { slot = cell.Slot, on = true });
+        _lastRenew = _main.Clock.Now;
+        return SendAsync("comms-key", new { slot = cell.Slot, on = true, leaseMs = LeaseMs });
     }
 
     public Task ReleaseAsync(CommsCellViewModel cell)
@@ -362,7 +369,8 @@ public sealed class CommsViewModel : ObservableObject
         }
         if (_allHeld) return Task.CompletedTask;
         _allHeld = true;
-        return SendAsync("comms-key", new { all = true, on = true });
+        _lastRenew = _main.Clock.Now;
+        return SendAsync("comms-key", new { all = true, on = true, leaseMs = LeaseMs });
     }
 
     public Task AllReleaseAsync()
@@ -370,6 +378,18 @@ public sealed class CommsViewModel : ObservableObject
         if (!_allHeld) return Task.CompletedTask;
         _allHeld = false;
         return SendAsync("comms-key", new { all = true, on = false });
+    }
+
+    // Renew the lease on every held key (called from the shell's 250 ms tick).
+    public void Tick()
+    {
+        var held = Cells.Where(c => c.Held).ToList();
+        if (held.Count == 0 && !_allHeld) return;
+        var now = _main.Clock.Now;
+        if (now - _lastRenew < RenewEvery) return;
+        _lastRenew = now;
+        foreach (var c in held) _ = SendAsync("comms-key", new { slot = c.Slot, on = true, leaseMs = LeaseMs });
+        if (_allHeld) _ = SendAsync("comms-key", new { all = true, on = true, leaseMs = LeaseMs });
     }
 
     // Digits 1-9 key the first nine reachable cells (panel-scoped).

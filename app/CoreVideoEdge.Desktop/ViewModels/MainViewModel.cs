@@ -141,6 +141,7 @@ public sealed class MainViewModel : ObservableObject
         Connect.Tick();
         Routing.Tick();
         Record.Tick();
+        Comms.Tick();
         if (_toast is not null && Clock.Now > _toastUntil) Toast = null;
         Refresh();
     }
