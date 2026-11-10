@@ -301,8 +301,15 @@ void PreviewPublisher::publishSlot(Slot& slot, std::int64_t nowMs) {
       }
     }
   }
-  if (slot.windowStartMs == 0) slot.windowStartMs = nowMs;
-  if (nowMs - slot.windowStartMs >= 1000) {
+  // The first fps window opens at the first frame, not when the slot was
+  // routed: a window that began before the source's first frame reported a
+  // low rate that was never delivered (21.9 for a 30 fps source on a slow
+  // runner). Nothing is measured before a frame exists.
+  if (slot.windowStartMs == 0 && newFrame) {
+    slot.windowStartMs = nowMs;
+    slot.windowFrames = 0;
+  }
+  if (slot.windowStartMs != 0 && nowMs - slot.windowStartMs >= 1000) {
     slot.measure.fpsX100 = static_cast<int>(slot.windowFrames * 100000 / static_cast<std::uint64_t>(nowMs - slot.windowStartMs));
     slot.windowFrames = 0;
     slot.windowStartMs = nowMs;

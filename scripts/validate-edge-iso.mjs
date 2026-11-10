@@ -165,7 +165,10 @@ function audioClaps(file) {
   return times;
 }
 
-// Times (s) of the fake's full-white video frames in an ISO.
+// Times (s) of the fake's full-white video frames in an ISO. The fake paints
+// the clap at Y=235 (studio white); a decoded average "> 235" passed on Windows
+// only by encoder overshoot and found no clap at all on VideoToolbox. The
+// fake's normal frames average ~130, so 225 is unambiguous.
 function videoClaps(file) {
   const r = spawnSync('ffmpeg', ['-v', 'error', '-i', file, '-an', '-vf',
     'scale=192:108,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-', '-f', 'null', '-'], {
@@ -177,7 +180,7 @@ function videoClaps(file) {
     const p = line.match(/pts_time:([0-9.]+)/);
     if (p) pts = Number(p[1]);
     const y = line.match(/YAVG=([0-9.]+)/);
-    if (y && pts !== null && Number(y[1]) > 235) {
+    if (y && pts !== null && Number(y[1]) > 225) {
       if (!times.length || pts - times[times.length - 1] > 0.5) times.push(pts);
     }
   }

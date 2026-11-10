@@ -72,6 +72,37 @@ Outputs: `build\bin\corevideo-edge.exe`, `corevideo-zoom-engine.exe` (with the
 SDK runtime copied beside it), `corevideo-zoom-engine-fake.exe`;
 `app\CoreVideoEdge.Desktop\bin\x64\Release\net9.0\CoreVideoEdge.exe`.
 
+## Build (macOS, Apple Silicon: node and engine)
+
+There is no Mac in the dev loop: every Mac compile and test runs in GitHub
+Actions (`.github/workflows/macos.yml`, jobs `native` and `engine`, on pushes
+to `main` and `mac-*`). On a Mac with Xcode command-line tools, CMake, Ninja,
+Node and FFmpeg (`brew install cmake ninja ffmpeg node`):
+
+```bash
+cmake -S native -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build/mac
+build/mac/corevideo-edge-tests
+node scripts/validate-edge-iso.mjs --sources 6 --seconds 30        # fake engine, build/mac by default (--bin overrides)
+
+# Real engine: ZOOM_SDK_DIR is the folder CONTAINING ZoomSDK.framework (never commit it).
+cmake -S native -B build/engine -G Ninja -DCMAKE_BUILD_TYPE=Release -DEDGE_BUILD_ZOOM_ENGINE=ON -DZOOM_SDK_DIR="$ZOOM_SDK_DIR"
+cmake --build build/engine --target corevideo-zoom-engine corevideo-edge
+scripts/make-macos-engine-bundle.sh --build-dir build/engine --zoom-sdk "$ZOOM_SDK_DIR"   # --link-sdk for a fast local symlink
+```
+
+Outputs (no `.exe`, at the build root): `corevideo-edge`, `corevideo-edge-tests`,
+`corevideo-zoom-engine-fake`, `corevideo-edge-ndi-probe`, and
+`build/engine/corevideo-zoom-engine.app` with the SDK in `Contents/Frameworks`
+(the macOS SDK only authenticates from inside an `.app`). The node looks for
+the engine at `<node dir>/../Helpers/corevideo-zoom-engine.app/Contents/MacOS/corevideo-zoom-engine`
+(inside `CoreVideo Edge.app`), then `<node dir>/corevideo-zoom-engine.app/...`
+(build tree); `--engine <path>` overrides. ISOs are written with VideoToolbox
+H.264 + AVAssetWriter AAC (same file contract as Windows). SRT feeds use
+FFmpeg from PATH, `COREVIDEO_FFMPEG_DIR` or Homebrew (`h264_videotoolbox`,
+libx264 fallback); NDI loads `libndi.dylib` (`NDI_RUNTIME_DIR_V6`, the NDI SDK
+for Apple, `/usr/local/lib`).
+
 ## Prove it end to end (no meeting, no desktop)
 
 `validate-edge-iso.mjs` drives `corevideo-edge.exe` only through its control
