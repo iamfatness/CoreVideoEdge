@@ -44,6 +44,13 @@ jobs:
         run: cmake --build build/mac
       - name: Native tests
         run: build/mac/corevideo-edge-tests
+      - name: Binary names and engine path contract
+        run: |
+          set -e
+          for b in corevideo-edge corevideo-edge-ndi-probe corevideo-zoom-engine-fake corevideo-edge-tests; do
+            test -x "build/mac/$b"
+          done
+          build/mac/corevideo-edge --version
       - name: Validator (fake engine, control API only)
         run: |
           set -e
@@ -58,8 +65,7 @@ jobs:
         with:
           name: mac-native-diagnostics
           path: |
-            build/mac/*.log
-            validate-out/**
+            build/validate-out/*.log
           if-no-files-found: ignore
 
   engine:
@@ -90,6 +96,13 @@ jobs:
         run: cmake --build build/engine --target corevideo-zoom-engine corevideo-edge
       - name: Engine bundle
         run: scripts/make-macos-engine-bundle.sh --build-dir build/engine --zoom-sdk "$ZOOM_SDK_DIR"
+      - name: Node finds the bundled engine (build-tree path contract)
+        run: |
+          set -e
+          test -x build/engine/corevideo-zoom-engine.app/Contents/MacOS/corevideo-zoom-engine
+          # Info.plist and rpath only; the engine is never started here (no meeting, no secrets).
+          plutil -lint build/engine/corevideo-zoom-engine.app/Contents/Info.plist
+          otool -l build/engine/corevideo-zoom-engine.app/Contents/MacOS/corevideo-zoom-engine | grep -A2 LC_RPATH | grep -q "@executable_path/../Frameworks"
       - name: Bundle self-check (SDK runtime in Contents/Frameworks)
         run: |
           set -e
