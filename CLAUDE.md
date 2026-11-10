@@ -8,15 +8,18 @@ file in the same change as any substantive work.
 - 2026-11-08 (v1): Zoom sign-in + join, Sources (subscribe a subset), ISO record.
 - 2026-11-09 (owner, v2): routing (Subscribe + ISO, cap 8), Monitor with live
   previews, Engine On, breakout-room survival, record format (1080p/720p,
-  source/30/60), live **feeds to Pro over NDI and SRT** (per routed slot), a
+  source/30/60 — now per slot on Routing), live **feeds to Pro over NDI and SRT** (per routed slot), a
   logo + Pro/Volt-family design, Windows first and designed for macOS.
   Specs: `docs/superpowers/specs/2026-11-09-*`.
-- 2026-11-09 evening (owner): Routing never hides a crosspoint (every S/I
-  cell drawn; unavailable ones recede to the hairline), the operator picks the
-  slot (a free cell routes to THAT slot), and the **Zoom feed resolution**
-  (1080p default / 720p / 360p) is chosen on Routing: a toolbar default for
-  new routes plus a per-slot picker on each routed row (`set-resolution`).
-  Each row shows what Zoom delivered and, when the SDK refused a tier, says so.
+- 2026-11-09 evening (owner): Routing never hides or greys a crosspoint and
+  never reflows on a click: every cell is live (a click takes the guest to
+  that slot: route, move, or replace the occupant; an ISO cell on another
+  column does the same with the ISO armed); pending shows only in the cell.
+  Per slot, chosen on Routing (toolbar default + row pickers): **Zoom feed
+  resolution** (1080p default / 720p / 360p, `set-resolution`) and **frame
+  rate** (Source / 30 / 60, `set-fps`) for that slot's ISO and SRT feed; the
+  Record tab no longer has a rate. Delivered size shows once, under the slot
+  header. Monitor tiles scale to fit the window (`MonitorView.BestItemWidth`).
 - Still out: compositor, scenes, graphics, program output, streaming, virtual
   camera. Never downgrade resolution automatically to fit more people on one
   node: 1080p unless the operator explicitly picks 720p/360p for a slot.
@@ -74,6 +77,15 @@ file in the same change as any substantive work.
 - **Validator `--sources 8` fails the clap check on ISO-08 on main too**
   (23 video claps vs 10 audio: false video-clap detections on the fake's 8th
   guest). Pre-existing, not a sync defect; untriaged.
+- **A take never greys or reflows.** Cells only lock while a take records the
+  slots involved; the node refuses a move/replace touching a recording slot.
+  A "Waiting for the node" text line under the row pushed every row below
+  down and back up on each click (owner: "refreshes weird"): never reintroduce it.
+- **Constant 60 from a 30 fps source probes as 59.99** (`avg_frame_rate`
+  27000000/450059) on main too: the validator's `--format 1080/60 --fps 30`
+  check fails; 30 from 60 is exact. Pre-existing, untriaged.
+- **The app is a GUI-subsystem exe.** PowerShell `&` does not wait for it and
+  leaves `$LASTEXITCODE` empty; `render-screenshots.ps1` waits on the process.
 - **Tooling trap:** in this environment the Bash tool collapses `\\n` inside
   heredocs (python/JS strings and regexes came out with real newlines). Put
   scripted edits with backslashes in a file written by the Write tool, or use

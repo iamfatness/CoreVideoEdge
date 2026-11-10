@@ -67,9 +67,12 @@ try {
   foreach ($s in $shots) {
     $name, $state, $screen, $extra = $s
     $png = Join-Path $out "$name.png"
-    $args = @('--screenshot', (State $state), $screen, $png) + (Preview $state.Replace('.edited', '')) + $extra
-    & $Exe @args
-    if ($LASTEXITCODE -ne 0) { throw "screenshot $name failed ($LASTEXITCODE)" }
+    $shotArgs = @('--screenshot', (State $state), $screen, $png) + (Preview $state.Replace('.edited', '')) + $extra
+    # The app is a GUI-subsystem exe: '&' does not wait for it and leaves
+    # $LASTEXITCODE empty, so wait on the process and read its exit code.
+    $quoted = $shotArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+    $proc = Start-Process -FilePath $Exe -ArgumentList $quoted -Wait -PassThru -NoNewWindow
+    if ($proc.ExitCode -ne 0) { throw "screenshot $name failed ($($proc.ExitCode))" }
     Write-Host "rendered $png"
   }
 } finally {

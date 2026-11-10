@@ -69,9 +69,9 @@ try {
     await sleep(1500);
     await save('joined-empty');
     const people = state().participants.filter((p) => !p.self);
-    for (const p of people.slice(0, 5)) check(await send('subscribe', { participantId: p.id, on: true }), 'subscribe');
+    for (const p of people.slice(0, 8)) check(await send('subscribe', { participantId: p.id, on: true }), 'subscribe');
     await sleep(500);
-    // Arm 3 of the 5 (the node may arm new subscriptions by default).
+    // Arm 3 of the 8 (the node may arm new subscriptions by default).
     for (const sub of state().subscriptions) check(await send('iso', { slot: sub.slot, on: sub.slot <= 3 }), 'iso');
     await sleep(3500);
     await save('in-meeting', true);
@@ -81,7 +81,8 @@ try {
     check(await send('engine', { on: true }), 'engine on');
     await until((s) => s.rawMedia?.active === true);
     await sleep(3000);
-    check(await send('set-record-format', { height: 1080, fps: 30 }), 'set-record-format');
+    check(await send('set-record-format', { height: 1080 }), 'set-record-format');
+    for (const s of state().subscriptions) check(await send('set-fps', { slot: s.slot, fps: 30 }), 'set-fps');
     check(await send('record-start'), 'record-start');
     await sleep(8000);
     await save('recording', true);

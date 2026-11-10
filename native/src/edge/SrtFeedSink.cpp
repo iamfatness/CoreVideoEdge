@@ -46,14 +46,15 @@ std::string findFfmpeg() {
 
 namespace {
 
-constexpr int kW = 1920, kH = 1080, kFps = 30;
+constexpr int kW = 1920, kH = 1080;
 constexpr size_t kAudioQueueMax = 48000 * 2 * 2;  // 2 s of stereo floats
 
 std::wstring widen(const std::string& s) { return std::filesystem::path(s).wstring(); }
 
 class SrtSink final : public FeedSink {
  public:
-  SrtSink(SrtSettings settings, int slot) : settings_(std::move(settings)), slot_(slot) {}
+  SrtSink(SrtSettings settings, int slot, int fps)
+      : settings_(std::move(settings)), slot_(slot), fps_(fps == 60 ? 60 : 30) {}
   ~SrtSink() override {
     running_ = false;
     audioCv_.notify_all();
@@ -97,7 +98,7 @@ class SrtSink final : public FeedSink {
     std::vector<std::wstring> a = {L"-hide_banner", L"-nostats", L"-loglevel", L"info",
                                    L"-fflags", L"nobuffer",
                                    L"-f", L"rawvideo", L"-pix_fmt", L"nv12", L"-s", L"1920x1080",
-                                   L"-framerate", std::to_wstring(kFps),
+                                   L"-framerate", std::to_wstring(fps_),
                                    L"-i", L"pipe:0",
                                    L"-f", L"f32le", L"-ar", L"48000", L"-ac", L"2", L"-i", audioPipe,
                                    L"-map", L"0:v", L"-map", L"1:a",
@@ -112,7 +113,9 @@ class SrtSink final : public FeedSink {
                             L"-b:v", L"8M", L"-maxrate", L"8M", L"-bufsize", L"1M"})
         a.emplace_back(s);
     }
-    for (const auto* s : {L"-g", L"30", L"-bf", L"0", L"-c:a", L"aac", L"-b:a", L"192k",
+    a.push_back(L"-g");
+    a.push_back(std::to_wstring(fps_));  // a keyframe each second
+    for (const auto* s : {L"-bf", L"0", L"-c:a", L"aac", L"-b:a", L"192k",
                           L"-ar", L"48000", L"-f", L"mpegts"})
       a.emplace_back(s);
     a.push_back(widen(srtUrl(settings_, slot_, false)));
@@ -279,7 +282,7 @@ class SrtSink final : public FeedSink {
       }
     });
 
-    // Video pacer: a constant 30 fps of the latest picture (repeat when Zoom
+    // Video pacer: a constant fps_ (30 or 60, the slot's Routing rate) of the latest picture (repeat when Zoom
     // is slower, newest wins when faster). A guest with their camera off has
     // no frames at all; after 1 s the feed carries black so FFmpeg starts and
     // the guest's audio still reaches Pro (review 2026-11-09).
@@ -300,7 +303,7 @@ class SrtSink final : public FeedSink {
         DWORD written = 0;
         if (!WriteFile(videoWrite, frame.data(), static_cast<DWORD>(frame.size()), &written, nullptr)) break;
       }
-      next += std::chrono::microseconds(1'000'000 / kFps);
+      next += std::chrono::microseconds(1'000'000 / fps_);
       std::this_thread::sleep_until(next);
       if (std::chrono::steady_clock::now() - next > std::chrono::seconds(1)) next = std::chrono::steady_clock::now();
     }
@@ -332,6 +335,7 @@ class SrtSink final : public FeedSink {
 
   SrtSettings settings_;
   int slot_;
+  int fps_;
   std::string ffmpeg_;
   std::atomic<bool> running_{true};
   std::atomic<bool> connected_{false};
@@ -351,8 +355,8 @@ class SrtSink final : public FeedSink {
 
 }  // namespace
 
-std::unique_ptr<FeedSink> makeSrtFeedSink(const SrtSettings& settings, int slot) {
-  return std::make_unique<SrtSink>(settings, slot);
+std::unique_ptr<FeedSink> makeSrtFeedSink(const SrtSettings& settings, int slot, int fps) {
+  return std::make_unique<SrtSink>(settings, slot, fps);
 }
 
 #else
@@ -369,7 +373,7 @@ class UnsupportedSrtSink final : public FeedSink {
 };
 }  // namespace
 
-std::unique_ptr<FeedSink> makeSrtFeedSink(const SrtSettings&, int) { return std::make_unique<UnsupportedSrtSink>(); }
+std::unique_ptr<FeedSink> makeSrtFeedSink(const SrtSettings&, int, int) { return std::make_unique<UnsupportedSrtSink>(); }
 
 #endif
 

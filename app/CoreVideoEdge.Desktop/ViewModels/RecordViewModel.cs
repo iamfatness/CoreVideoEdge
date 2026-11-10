@@ -92,7 +92,7 @@ public sealed class RecordViewModel : ObservableObject
     private string? _folderError;
     private string? _formatError;
     private string? _actionError;
-    private (int Height, int Fps)? _pendingFormat;
+    private int? _pendingFormat;  // height awaiting the node
     private bool _starting;
     private bool _stopping;
     private bool _confirmStop;
@@ -107,8 +107,7 @@ public sealed class RecordViewModel : ObservableObject
             var dir = S?.SessionDir ?? S?.RecordFolder;
             if (!string.IsNullOrEmpty(dir)) _main.Shell.OpenFolder(dir);
         });
-        SetHeightCommand = new AsyncCommand(p => SetFormatAsync(Convert.ToInt32(p), null), main.ReportError, _ => !Locked);
-        SetFpsCommand = new AsyncCommand(p => SetFormatAsync(null, Convert.ToInt32(p)), main.ReportError, _ => !Locked);
+        SetHeightCommand = new AsyncCommand(p => SetHeightAsync(Convert.ToInt32(p)), main.ReportError, _ => !Locked);
         PrimaryCommand = new AsyncCommand(PrimaryAsync, main.ReportError, () => PrimaryEnabled);
         ConfirmStopCommand = new AsyncCommand(StopAsync, main.ReportError);
         CancelStopCommand = new RelayCommand(() => { _confirmStop = false; RaiseAll(); });
@@ -118,7 +117,6 @@ public sealed class RecordViewModel : ObservableObject
     public AsyncCommand ChangeFolderCommand { get; }
     public ICommand OpenFolderCommand { get; }
     public AsyncCommand SetHeightCommand { get; }
-    public AsyncCommand SetFpsCommand { get; }
     public AsyncCommand PrimaryCommand { get; }
     public AsyncCommand ConfirmStopCommand { get; }
     public ICommand CancelStopCommand { get; }
@@ -175,29 +173,23 @@ public sealed class RecordViewModel : ObservableObject
 
     // ------------------------------------------------------------ format
 
-    public int Height => _pendingFormat?.Height ?? S?.RecordFormat?.Height ?? 0;
-    public int Fps => _pendingFormat?.Fps ?? S?.RecordFormat?.Fps ?? -1;
+    public int Height => _pendingFormat ?? S?.RecordFormat?.Height ?? 0;
     public bool FormatKnown => S?.RecordFormat is not null;
     public bool Is1080 => Height == 1080;
     public bool Is720 => Height == 720;
-    public bool FpsSource => Fps == 0;
-    public bool Fps30 => Fps == 30;
-    public bool Fps60 => Fps == 60;
     public bool FormatPending => _pendingFormat is not null;
     public string? FormatError => _formatError;
     public bool FormatErrorVisible => _formatError is not null;
     public string LockedNote => Recording ? "Locked while recording" : "";
 
-    private async Task SetFormatAsync(int? height, int? fps)
+    // The frame rate moved to each routed slot on Routing (owner 2026-11-09).
+    private async Task SetHeightAsync(int height)
     {
-        var current = S?.RecordFormat;
-        var h = height ?? current?.Height ?? 1080;
-        var f = fps ?? current?.Fps ?? 0;
-        if (current is not null && current.Height == h && current.Fps == f) return;
+        if (S?.RecordFormat is { } current && current.Height == height) return;
         _formatError = null;
-        _pendingFormat = (h, f);
+        _pendingFormat = height;
         RaiseAll();
-        var result = await _main.SendAsync("set-record-format", new { height = h, fps = f });
+        var result = await _main.SendAsync("set-record-format", new { height });
         if (!result.Ok)
         {
             _formatError = result.Error;
@@ -308,7 +300,7 @@ public sealed class RecordViewModel : ObservableObject
 
     public void Apply(EdgeState s)
     {
-        if (_pendingFormat is { } pf && s.RecordFormat is { } rf && rf.Height == pf.Height && rf.Fps == pf.Fps) _pendingFormat = null;
+        if (_pendingFormat is { } pf && s.RecordFormat is { } rf && rf.Height == pf) _pendingFormat = null;
         if (!_prefixEditing) _prefix = s.FilePrefix;
         if (!s.Recording) _confirmStop = false;
 
@@ -356,7 +348,6 @@ public sealed class RecordViewModel : ObservableObject
         foreach (var n in Names) Raise(n);
         ChangeFolderCommand.NotifyCanExecuteChanged();
         SetHeightCommand.NotifyCanExecuteChanged();
-        SetFpsCommand.NotifyCanExecuteChanged();
         PrimaryCommand.NotifyCanExecuteChanged();
         SavePrefixCommand.NotifyCanExecuteChanged();
     }
@@ -364,8 +355,8 @@ public sealed class RecordViewModel : ObservableObject
     private static readonly string[] Names =
     [
         nameof(Recording), nameof(Locked), nameof(Folder), nameof(HasFolder), nameof(FolderShort), nameof(FreeText), nameof(FreeTone),
-        nameof(FolderError), nameof(FolderErrorVisible), nameof(Prefix), nameof(Height), nameof(Fps), nameof(FormatKnown),
-        nameof(Is1080), nameof(Is720), nameof(FpsSource), nameof(Fps30), nameof(Fps60), nameof(FormatPending), nameof(FormatError),
+        nameof(FolderError), nameof(FolderErrorVisible), nameof(Prefix), nameof(Height), nameof(FormatKnown),
+        nameof(Is1080), nameof(Is720), nameof(FormatPending), nameof(FormatError),
         nameof(FormatErrorVisible), nameof(LockedNote), nameof(ArmedCount), nameof(StartBlockedReason), nameof(PrimaryEnabled),
         nameof(ConfirmStopVisible), nameof(Busy), nameof(PrimaryText), nameof(PrimaryTimer), nameof(ActionError),
         nameof(ActionErrorIsFailure), nameof(ActionErrorVisible), nameof(RecordingWarning), nameof(RecordingWarningVisible),

@@ -26,7 +26,8 @@ public sealed record EdgeParticipant(
 // SDK's subscribe() accepted (the engine falls back a tier on refusal), absent
 // until the engine reported it. Delivered size is on the participant.
 public sealed record EdgeSubscription(int Slot, uint ParticipantId, string Name, bool Present, bool Iso, bool FromConfig,
-    int Resolution = 1080, int? ZoomGranted = null, int? ZoomRefused = null, int? ZoomRefusedCode = null, bool ZoomFailed = false);
+    int Resolution = 1080, int? ZoomGranted = null, int? ZoomRefused = null, int? ZoomRefusedCode = null, bool ZoomFailed = false,
+    int Fps = 0);
 
 public sealed record EdgeIsoStream(
     int Index,
@@ -166,7 +167,8 @@ public sealed record EdgeState
                 Zoom(s) is { } z ? (int?)LN(z, "granted") : null,
                 Zoom(s) is { } z2 ? (int?)LN(z2, "refused") : null,
                 Zoom(s) is { } z3 ? (int?)LN(z3, "refusedCode") : null,
-                Zoom(s) is { } z4 && B(z4, "failed"))).ToList()
+                Zoom(s) is { } z4 && B(z4, "failed"),
+                (int)(LN(s, "fps") ?? 0))).ToList()
             : new List<EdgeSubscription>();
 
         bool recording = false;

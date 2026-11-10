@@ -144,6 +144,8 @@ void EdgeController::handleCommand(const std::string& line) {
     error = cmdLeave();
   } else if (cmd == "subscribe") {
     error = cmdSubscribe(c);
+  } else if (cmd == "set-fps") {
+    error = cmdSetFps(c);
   } else if (cmd == "set-resolution") {
     error = cmdSetResolution(c);
   } else if (cmd == "unsubscribe-slot") {
@@ -268,15 +270,28 @@ std::string EdgeController::cmdSubscribe(const Json& c) {
   const bool on = !onValue || onValue->asBool(true);
   const auto it = std::find_if(roster_.begin(), roster_.end(), [&](const auto& p) { return p.id == id; });
   if (it == roster_.end()) return "That participant is not in the meeting.";
+  const int slot = static_cast<int>(c.getNumber("slot", 0));
+  const auto* current = book_.findByParticipant(id);
   if (!on) {
-    if (const auto* s = book_.findByParticipant(id); s && slotIsRecording(s->slot)) {
-      return "Stop recording before unsubscribing " + s->displayName + " (their ISO is being recorded).";
+    if (current && slotIsRecording(current->slot)) {
+      return "Stop recording before unsubscribing " + current->displayName + " (their ISO is being recorded).";
+    }
+  } else if (slot != 0) {
+    // A crosspoint take may move this guest or replace an occupant: never
+    // under a running ISO on either slot.
+    if (current && current->slot != slot && slotIsRecording(current->slot)) {
+      return current->displayName + "'s ISO is recording on S" + std::to_string(current->slot) +
+             ". Stop recording to move them.";
+    }
+    if (const auto* occupant = book_.findBySlot(slot);
+        occupant && occupant->participantId != id && slotIsRecording(slot)) {
+      return "S" + std::to_string(slot) + " is recording " + occupant->displayName + ". Stop recording to replace them.";
     }
   }
-  const int slot = static_cast<int>(c.getNumber("slot", 0));
   const int height = static_cast<int>(c.getNumber("resolution", 1080));
+  const int fps = static_cast<int>(c.getNumber("fps", 0));
   std::vector<SubscriptionAction> actions;
-  const auto refusal = book_.request({it->id, it->displayName, it->isMe}, on, actions, "operator", slot, height);
+  const auto refusal = book_.request({it->id, it->displayName, it->isMe}, on, actions, "operator", slot, height, fps);
   applyActions(actions);
   return refusal;
 }
@@ -290,6 +305,14 @@ std::string EdgeController::cmdSetResolution(const Json& c) {
   const auto refusal = book_.setHeight(slot, static_cast<int>(c.getNumber("resolution", 1080)), actions);
   zoomGrant_.erase(slotSourceUuid(slot));
   applyActions(actions);
+  return refusal;
+}
+
+std::string EdgeController::cmdSetFps(const Json& c) {
+  const int slot = static_cast<int>(c.getNumber("slot"));
+  if (slotIsRecording(slot)) return "The frame rate is fixed while this slot's ISO is recording. Stop to change it.";
+  const auto refusal = book_.setFps(slot, static_cast<int>(c.getNumber("fps", 0)));
+  // tick() hands the routing to the feed sender, which restarts an SRT feed at the new rate.
   return refusal;
 }
 
@@ -322,13 +345,12 @@ std::string EdgeController::cmdRecordStart() {
   request.writer.hardwareEncode = options_.config.hardwareEncode;
   request.writer.height = recordHeight_;
   request.writer.width = recordHeight_ * 16 / 9;
-  request.writer.constantFps = recordFps_;
   auto selections = book_.selections();
   std::sort(selections.begin(), selections.end(), [](const auto& a, const auto& b) { return a.slot < b.slot; });
   for (const auto& s : selections) {
     if (!s.iso) continue;
     if (!s.present) return s.displayName + " has left the meeting. Turn their ISO off or remove them before recording.";
-    request.sources.push_back({s.slot, slotSourceUuid(s.slot), s.participantId, s.displayName});
+    request.sources.push_back({s.slot, slotSourceUuid(s.slot), s.participantId, s.displayName, s.fps});
   }
   const auto refusal = session_.start(request);
   if (!refusal.empty()) return refusal;
@@ -464,11 +486,10 @@ std::string EdgeController::cmdSetFeeds(const Json& c) {
 std::string EdgeController::cmdRecordFormat(const Json& c) {
   if (session_.active()) return "Stop recording before changing the record format.";
   const int height = static_cast<int>(c.getNumber("height", recordHeight_));
-  const int fps = static_cast<int>(c.getNumber("fps", recordFps_));
   if (height != 1080 && height != 720) return "Record resolution must be 1080 or 720.";
-  if (fps != 0 && fps != 30 && fps != 60) return "Record frame rate must be 0 (as Zoom delivers), 30 or 60.";
+  // The frame rate moved to each routed slot (owner 2026-11-09): set-fps.
+  if (c.getNumber("fps", 0) != 0) return "The frame rate is set per slot now (set-fps), not on the record format.";
   recordHeight_ = height;
-  recordFps_ = fps;
   return {};
 }
 
@@ -677,7 +698,7 @@ void EdgeController::tick() {
   std::vector<FeedSlotSpec> feedSlots;
   if (phase_ == Phase::InMeeting && engine_.running()) {
     for (const auto& s : book_.selections())
-      feedSlots.push_back({s.slot, slotSourceUuid(s.slot), s.participantId, s.displayName});
+      feedSlots.push_back({s.slot, slotSourceUuid(s.slot), s.participantId, s.displayName, s.fps});
   }
   feeds_.setSlots(engine_.shmPrefix(), std::move(feedSlots));
 }
@@ -733,8 +754,7 @@ Json EdgeController::buildState() const {
   }
   if (movingRooms_) state.emplace("movingRooms", true);
   state.emplace("recordFormat", Json(Json::Object{{"width", static_cast<double>(recordHeight_ * 16 / 9)},
-                                                  {"height", static_cast<double>(recordHeight_)},
-                                                  {"fps", static_cast<double>(recordFps_)}}));
+                                                  {"height", static_cast<double>(recordHeight_)}}));
   if (!lastError_.empty()) state.emplace("error", lastError_);
   if (canEndOtherSession_) state.emplace("canEndOtherSession", true);
   if (!meetingId_.empty() && phase_ != Phase::Idle) state.emplace("meetingId", meetingId_);
@@ -799,7 +819,7 @@ Json EdgeController::buildState() const {
   for (const auto& s : book_.selections()) {
     Json::Object row{{"slot", s.slot}, {"participantId", static_cast<double>(s.participantId)},
                      {"name", s.displayName}, {"present", s.present}, {"iso", s.iso},
-                     {"fromConfig", s.fromConfig}, {"resolution", s.height}};
+                     {"fromConfig", s.fromConfig}, {"resolution", s.height}, {"fps", s.fps}};
     if (const auto g = zoomGrant_.find(slotSourceUuid(s.slot)); g != zoomGrant_.end()) {
       Json::Object zoom;
       if (g->second.grantedHeight) zoom.emplace("granted", g->second.grantedHeight);

@@ -117,6 +117,22 @@ public sealed class ParticipantRowViewModel : ObservableObject
         set { if (Set(ref _resolution, value)) ResolutionPicked?.Invoke(this, value); }
     }
     internal void SetResolutionFromNode(int value) => Set(ref _resolution, value, nameof(Resolution));
+
+    // The slot's output rate (ISO + SRT feed); 0 = as Zoom sends.
+    private int _fps;
+    internal Action<ParticipantRowViewModel, int>? FpsPicked { get; set; }
+    public static IReadOnlyList<int> FpsOptions { get; } = [0, 30, 60];
+    public static Avalonia.Data.Converters.FuncValueConverter<int, string> FpsLabel { get; } =
+        new(f => f == 0 ? "Source" : $"{f} fps");
+    public int Fps
+    {
+        get => _fps;
+        set { if (Set(ref _fps, value)) FpsPicked?.Invoke(this, value); }
+    }
+    internal void SetFpsFromNode(int value) => Set(ref _fps, value, nameof(Fps));
+    // The feed pickers lock while this slot's ISO records (the node refuses).
+    private bool _feedLocked;
+    public bool FeedLocked { get => _feedLocked; set => Set(ref _feedLocked, value); }
     public bool OfferedBelowAsked { get => _offeredBelow; set => Set(ref _offeredBelow, value); }
     public string OfferedTip { get => _offeredTip; set => Set(ref _offeredTip, value); }
 
@@ -150,6 +166,11 @@ public sealed class SlotHeaderViewModel : ObservableObject
     public Tone Tone { get => _tone; set { if (Set(ref _tone, value)) Raise(nameof(HasDot)); } }
     public bool HasDot => _tone != Tone.Neutral;
     public string Raster { get => _raster; set => Set(ref _raster, value); }
+    // Delivered below what the slot asks Zoom for (amber), and why.
+    private bool _rasterBelow;
+    private string _tip = "";
+    public bool RasterBelowAsked { get => _rasterBelow; set => Set(ref _rasterBelow, value); }
+    public string Tip { get => _tip; set => Set(ref _tip, value); }
     public string Occupant { get => _occupant; set => Set(ref _occupant, value); }
     public string Word { get => _word; set => Set(ref _word, value); }
     public string AccessibleName => $"{(Kind == CellKind.Subscribe ? "Slot" : "ISO")} {Slot}";
@@ -166,6 +187,7 @@ public sealed class RoutingViewModel : ObservableObject
     private readonly Dictionary<int, (bool On, TimeSpan At)> _pendingIso = new();
     private readonly Dictionary<uint, (string Error, int Slot, TimeSpan At)> _failedSub = new();
     private int _defaultResolution = 1080;
+    private int _defaultFps;  // 0 = as Zoom sends
     private readonly Dictionary<int, (string Error, TimeSpan At)> _failedIso = new();
     private bool _videoOnOnly = true;
     private string _search = "";
@@ -187,6 +209,9 @@ public sealed class RoutingViewModel : ObservableObject
         Feed1080Command = new RelayCommand(() => DefaultResolution = 1080);
         Feed720Command = new RelayCommand(() => DefaultResolution = 720);
         Feed360Command = new RelayCommand(() => DefaultResolution = 360);
+        FpsSourceCommand = new RelayCommand(() => DefaultFps = 0);
+        Fps30Command = new RelayCommand(() => DefaultFps = 30);
+        Fps60Command = new RelayCommand(() => DefaultFps = 60);
     }
 
     public ICommand FreeSlotCommand { get; }
@@ -209,13 +234,47 @@ public sealed class RoutingViewModel : ObservableObject
     public ICommand Feed1080Command { get; }
     public ICommand Feed720Command { get; }
     public ICommand Feed360Command { get; }
-    // The most recent set-resolution send (tests await it).
+    // The frame rate new routes write and send on (ISO + SRT): Zoom cannot be
+    // asked for a rate, so this paces Edge's outputs. 0 = as Zoom sends.
+    public int DefaultFps
+    {
+        get => _defaultFps;
+        set
+        {
+            if (!ParticipantRowViewModel.FpsOptions.Contains(value) || !Set(ref _defaultFps, value)) return;
+            Raise(nameof(FpsSource)); Raise(nameof(Fps30)); Raise(nameof(Fps60));
+        }
+    }
+    public bool FpsSource => _defaultFps == 0;
+    public bool Fps30 => _defaultFps == 30;
+    public bool Fps60 => _defaultFps == 60;
+    public ICommand FpsSourceCommand { get; }
+    public ICommand Fps30Command { get; }
+    public ICommand Fps60Command { get; }
+
+    // The most recent set-resolution / set-fps send (tests await it).
     public Task? LastResolutionSend { get; private set; }
 
     private void OnResolutionPicked(ParticipantRowViewModel row, int height)
     {
         if (row.Slot is not int slot) return;
         LastResolutionSend = SendResolutionAsync(row, slot, height);
+    }
+
+    private void OnFpsPicked(ParticipantRowViewModel row, int fps)
+    {
+        if (row.Slot is not int slot) return;
+        LastResolutionSend = SendFpsAsync(row, slot, fps);
+    }
+
+    private async Task SendFpsAsync(ParticipantRowViewModel row, int slot, int fps)
+    {
+        var result = await _main.SendAsync("set-fps", new { slot, fps });
+        if (!result.Ok)
+        {
+            _failedSub[row.Id] = (result.Error ?? "The node refused.", slot, _main.Clock.Now);
+            Rebuild();
+        }
     }
 
     private async Task SendResolutionAsync(ParticipantRowViewModel row, int slot, int height)
@@ -312,8 +371,8 @@ public sealed class RoutingViewModel : ObservableObject
         // A pending mark clears when the node's state matches what was asked.
         foreach (var (id, p) in _pendingSub.ToList())
         {
-            var routed = s.Subscriptions.Any(x => x.ParticipantId == id);
-            if (routed == p.On) _pendingSub.Remove(id);
+            var at = s.Subscriptions.FirstOrDefault(x => x.ParticipantId == id && x.Present)?.Slot;
+            if (p.On ? at == p.Slot : at is null) _pendingSub.Remove(id);
         }
         foreach (var (slot, p) in _pendingIso.ToList())
         {
@@ -370,7 +429,7 @@ public sealed class RoutingViewModel : ObservableObject
             var p = visible[index];
             if (!_byId.TryGetValue(p.Id, out var row))
             {
-                row = new ParticipantRowViewModel(p.Id) { ResolutionPicked = OnResolutionPicked };
+                row = new ParticipantRowViewModel(p.Id) { ResolutionPicked = OnResolutionPicked, FpsPicked = OnFpsPicked };
                 _byId[p.Id] = row;
             }
             EnsureCells(row);
@@ -403,7 +462,11 @@ public sealed class RoutingViewModel : ObservableObject
         row.Slot = p.Slot;
         row.Iso = p.Slot is not null && p.Iso;
         var sub = p.Slot is int mine ? s.Subscriptions.FirstOrDefault(x => x.Slot == mine) : null;
-        if (sub is not null) row.SetResolutionFromNode(sub.Resolution);
+        if (sub is not null)
+        {
+            row.SetResolutionFromNode(sub.Resolution);
+            row.SetFpsFromNode(sub.Fps);
+        }
         string? zoomNote = null;
         if (p.ReceivedWidth is int w && p.ReceivedHeight is int h)
         {
@@ -431,6 +494,7 @@ public sealed class RoutingViewModel : ObservableObject
         var failedSub = failed?.Error;
         var atCap = NextFreeSlot(s) is null;
         var recordingThisIso = s.Recording && row.Iso;
+        row.FeedLocked = recordingThisIso;
 
         // Every crosspoint is drawn (owner 2026-11-09). The operator picks the
         // slot: a free cell routes this guest to THAT slot.
@@ -440,7 +504,7 @@ public sealed class RoutingViewModel : ObservableObject
             var occupant = s.Subscriptions.FirstOrDefault(x => x.Slot == k);
             CellState state;
             string tip;
-            if (pendingSub is { } pend && ((pend.On && k == pend.Slot) || (!pend.On && p.Slot == k)))
+            if (pendingSub is { } pend && k == pend.Slot)
             {
                 state = CellState.Pending;
                 tip = pend.On ? $"Routing {p.Name} to S{k}. Waiting for the node to confirm." : $"Unrouting {p.Name} from S{k}.";
@@ -457,25 +521,24 @@ public sealed class RoutingViewModel : ObservableObject
                 state = CellState.Failed;
                 tip = f.Error;
             }
+            // Every other crosspoint is live (owner 2026-11-09: no greying,
+            // no reflow). The node moves or replaces, or refuses with a reason.
             else if (occupant is not null)
             {
-                state = CellState.Unavailable;
-                tip = $"S{k} carries {occupant.Name}.";
+                state = CellState.Empty;
+                tip = p.Slot is int from
+                    ? $"Move {p.Name} from S{from} to S{k}, replacing {occupant.Name}."
+                    : $"Replace {occupant.Name} on S{k} with {p.Name}.";
             }
             else if (p.Slot is int at)
             {
-                state = CellState.Unavailable;
-                tip = $"{p.Name} is on S{at}. Unroute them there first to use S{k}.";
-            }
-            else if (atCap)
-            {
-                state = CellState.Unavailable;
-                tip = $"All {s.MaxSubscriptions} slots in use. Unroute one first.";
+                state = CellState.Empty;
+                tip = $"Move {p.Name} from S{at} to S{k}.";
             }
             else
             {
                 state = CellState.Empty;
-                tip = $"Route {p.Name} to S{k} at {_defaultResolution}p.";
+                tip = atCap ? $"All {s.MaxSubscriptions} slots in use." : $"Route {p.Name} to S{k} at {_defaultResolution}p.";
             }
             cell.State = state;
             cell.Tip = tip;
@@ -490,12 +553,11 @@ public sealed class RoutingViewModel : ObservableObject
             string tip;
             if (p.Slot != k)
             {
-                // Drawn, not live: an ISO records a routed slot, so only this
-                // guest's own column can arm.
-                state = CellState.Unavailable;
-                tip = p.Slot is int at
-                    ? $"{p.Name}'s ISO is I{at}."
-                    : $"Route {p.Name} to a slot to arm an ISO.";
+                // Live too: an ISO cell on another column routes (or moves)
+                // the guest to that slot with its ISO armed.
+                state = s.Recording ? CellState.Unavailable : CellState.Empty;
+                tip = s.Recording ? "ISO selection is fixed while recording."
+                    : p.Slot is int at ? $"Move {p.Name} from S{at} to S{k} (ISO I{k})." : $"Route {p.Name} to S{k} with an ISO.";
             }
             else if (_pendingIso.TryGetValue(k, out var pi))
             {
@@ -523,8 +585,10 @@ public sealed class RoutingViewModel : ObservableObject
             cell.AccessibleName = $"ISO, {p.Name}, slot {k}: {Words(state)}";
         }
 
-        row.Detail = failedSub ?? failedIso ?? (pendingSub is not null ? "Waiting for the node…" : zoomNote);
-        row.DetailIsError = failedSub is not null || failedIso is not null || (pendingSub is null && zoomNote is not null);
+        // Pending shows in the cell only: a pending text line pushed every row
+        // below down and back up on each click (owner: "refreshes weird").
+        row.Detail = failedSub ?? failedIso ?? zoomNote;
+        row.DetailIsError = failedSub is not null || failedIso is not null || zoomNote is not null;
     }
 
     private void ApplyHeaders(EdgeState s)
@@ -533,15 +597,18 @@ public sealed class RoutingViewModel : ObservableObject
         {
             var sub = s.Subscriptions.FirstOrDefault(x => x.Slot == header.Slot);
             var p = sub is null ? null : s.Participants?.FirstOrDefault(x => x.Id == sub.ParticipantId);
+            header.RasterBelowAsked = false;
             if (sub is null || (header.Kind == CellKind.Iso && !sub.Iso))
             {
                 header.Tone = Tone.Neutral;
                 header.Raster = "";
                 header.Occupant = "";
                 header.Word = "";
+                header.Tip = header.Kind == CellKind.Subscribe ? $"S{header.Slot}: free" : $"I{header.Slot}: no ISO";
                 continue;
             }
             header.Occupant = sub.Name;
+            header.Tip = sub.Name;
             if (header.Kind == CellKind.Iso)
             {
                 header.Tone = s.Recording ? Tone.Rec : Tone.Accent;
@@ -560,6 +627,9 @@ public sealed class RoutingViewModel : ObservableObject
                 header.Tone = p.Receiving ? Tone.Live : Tone.Error;
                 header.Word = p.Receiving ? "live" : "stalled";
                 header.Raster = Format.Raster(h, p.ReceivedFps);
+                header.RasterBelowAsked = h < sub.Resolution;
+                var row = _byId.TryGetValue(p.Id, out var r) ? r : null;
+                header.Tip = $"{sub.Name}. " + (row?.OfferedTip is { Length: > 0 } t ? t : $"Asked for {sub.Resolution}p.");
             }
             else
             {
@@ -575,9 +645,11 @@ public sealed class RoutingViewModel : ObservableObject
         var s = S;
         if (s is null) return;
         var row = cell.Row;
-        if (cell.Kind == CellKind.Subscribe)
+        if (cell.Kind == CellKind.Subscribe || row.Slot != cell.Column)
         {
-            var on = row.Slot is null;
+            // A cell on the guest's own slot unroutes; any other column takes
+            // the guest to that slot (route, move or replace).
+            var on = row.Slot != cell.Column;
             if (!on && s.Recording && row.Iso)
             {
                 _failedSub[row.Id] = ($"{row.Name}'s ISO is recording. Stop recording before unrouting.", cell.Column, _main.Clock.Now);
@@ -588,7 +660,9 @@ public sealed class RoutingViewModel : ObservableObject
             _pendingSub[row.Id] = (on, cell.Column, _main.Clock.Now);
             Rebuild();
             var result = on
-                ? await _main.SendAsync("subscribe", new { participantId = row.Id, on, slot = cell.Column, resolution = _defaultResolution })
+                ? row.Slot is null
+                    ? await _main.SendAsync("subscribe", new { participantId = row.Id, on, slot = cell.Column, resolution = _defaultResolution, fps = _defaultFps })
+                    : await _main.SendAsync("subscribe", new { participantId = row.Id, on, slot = cell.Column })
                 : await _main.SendAsync("subscribe", new { participantId = row.Id, on });
             if (!result.Ok)
             {
@@ -599,7 +673,7 @@ public sealed class RoutingViewModel : ObservableObject
         }
         else if (row.Slot is int slot)
         {
-            var on = !row.Iso;
+            var on = !row.Iso;  // own ISO column: arm / disarm
             _failedIso.Remove(slot);
             _pendingIso[slot] = (on, _main.Clock.Now);
             Rebuild();

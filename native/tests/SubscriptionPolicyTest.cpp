@@ -122,8 +122,9 @@ TEST(SubscriptionPolicy, IsoDefaultsOnAndCanBeToggled) {
   EXPECT_FALSE(book.setIso(7, true).empty());
 }
 
-// Routing (owner 2026-11-09): the operator picks the crosspoint, so a route
-// may name its slot; a taken or out-of-cap slot is refused, never re-placed.
+// Routing (owner 2026-11-09): a crosspoint take. A named slot routes the
+// guest to THAT slot, moving them if routed elsewhere and replacing whoever
+// held it; a slot past the cap is refused.
 TEST(SubscriptionPolicy, ARouteMayNameItsSlot) {
   SubscriptionBook book;
   const auto people = roster(3);
@@ -131,10 +132,72 @@ TEST(SubscriptionPolicy, ARouteMayNameItsSlot) {
   EXPECT_EQ(book.request(people[0], true, actions, "operator", 5), std::string());
   if (actions.size() != size_t{1}) { EXPECT_EQ(actions.size(), size_t{1}); return; }
   EXPECT_EQ(actions[0].slot, 5);
-  EXPECT_FALSE(book.request(people[1], true, actions, "operator", 5).empty());  // taken
   EXPECT_FALSE(book.request(people[1], true, actions, "operator", 9).empty());  // past the cap
   EXPECT_EQ(book.request(people[1], true, actions, "operator"), std::string());
   EXPECT_EQ(book.findByParticipant(people[1].id)->slot, 1);  // unnamed: lowest free
+}
+
+TEST(SubscriptionPolicy, ATakeOnAnotherSlotMovesTheGuestWithTheirSettings) {
+  SubscriptionBook book;
+  const auto people = roster(1);
+  std::vector<SubscriptionAction> actions;
+  book.request(people[0], true, actions, "operator", 2, 720, 60);
+  book.setIso(2, false);
+  actions.clear();
+  EXPECT_EQ(book.request(people[0], true, actions, "operator", 6), std::string());
+  if (actions.size() != size_t{2}) { EXPECT_EQ(actions.size(), size_t{2}); return; }
+  EXPECT_TRUE(actions[0].kind == SubscriptionAction::Kind::Unsubscribe);
+  EXPECT_EQ(actions[0].slot, 2);
+  EXPECT_TRUE(actions[1].kind == SubscriptionAction::Kind::Subscribe);
+  EXPECT_EQ(actions[1].slot, 6);
+  EXPECT_EQ(book.selections().size(), size_t{1});
+  const auto* s = book.findBySlot(6);
+  EXPECT_TRUE(s != nullptr);
+  if (!s) return;
+  EXPECT_EQ(s->height, 720);
+  EXPECT_EQ(s->fps, 60);
+  EXPECT_FALSE(s->iso);
+  actions.clear();
+  EXPECT_EQ(book.request(people[0], true, actions, "operator", 6), std::string());  // already there
+  EXPECT_TRUE(actions.empty());
+}
+
+TEST(SubscriptionPolicy, ATakeOnAnOccupiedSlotReplacesTheOccupant) {
+  SubscriptionBook book;
+  const auto people = roster(2);
+  std::vector<SubscriptionAction> actions;
+  book.request(people[0], true, actions, "operator", 3);
+  actions.clear();
+  EXPECT_EQ(book.request(people[1], true, actions, "operator", 3), std::string());
+  if (actions.size() != size_t{2}) { EXPECT_EQ(actions.size(), size_t{2}); return; }
+  EXPECT_TRUE(actions[0].kind == SubscriptionAction::Kind::Unsubscribe);
+  EXPECT_EQ(actions[0].participantId, people[0].id);
+  EXPECT_EQ(book.findBySlot(3)->participantId, people[1].id);
+  EXPECT_TRUE(book.findByParticipant(people[0].id) == nullptr);
+}
+
+TEST(SubscriptionPolicy, AtTheCapATakeOnAnOccupiedSlotStillWorks) {
+  SubscriptionBook book(2);
+  const auto people = roster(3);
+  std::vector<SubscriptionAction> actions;
+  book.request(people[0], true, actions);
+  book.request(people[1], true, actions);
+  EXPECT_FALSE(book.request(people[2], true, actions).empty());                     // no free slot
+  EXPECT_EQ(book.request(people[2], true, actions, "operator", 1), std::string());  // replace S1
+  EXPECT_EQ(book.findBySlot(1)->participantId, people[2].id);
+}
+
+TEST(SubscriptionPolicy, FrameRateIsPerSlotAndValidated) {
+  SubscriptionBook book;
+  const auto people = roster(1);
+  std::vector<SubscriptionAction> actions;
+  EXPECT_FALSE(book.request(people[0], true, actions, "operator", 0, 1080, 25).empty());
+  EXPECT_EQ(book.request(people[0], true, actions), std::string());
+  EXPECT_EQ(book.findBySlot(1)->fps, 0);  // default: as Zoom sends
+  EXPECT_EQ(book.setFps(1, 60), std::string());
+  EXPECT_EQ(book.findBySlot(1)->fps, 60);
+  EXPECT_FALSE(book.setFps(1, 24).empty());
+  EXPECT_FALSE(book.setFps(4, 30).empty());
 }
 
 // Feed resolution is the operator's explicit choice per slot (1080p default).

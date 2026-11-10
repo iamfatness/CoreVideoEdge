@@ -303,7 +303,7 @@ void FeedSender::reconcile() {
   for (auto it = workers_.begin(); it != workers_.end();) {
     const auto match = std::find_if(wanted_.begin(), wanted_.end(), [&](const FeedSlotSpec& w) {
       return w.slot == it->first && w.sourceUuid == it->second->spec.sourceUuid &&
-             w.participantId == it->second->spec.participantId;
+             w.participantId == it->second->spec.participantId && w.fps == it->second->spec.fps;
     });
     if (mode_ == FeedMode::Off || match == wanted_.end() || shmPrefix_ != it->second->prefix) it = workers_.erase(it);
     else ++it;
@@ -320,7 +320,7 @@ void FeedSender::reconcile() {
       worker->sink = std::make_unique<NdiSink>(worker->health.target);
     } else {
       worker->health.target = srtUrl(srt_, w.slot, true);
-      worker->sink = makeSrtFeedSink(srt_, w.slot);
+      worker->sink = makeSrtFeedSink(srt_, w.slot, w.fps == 60 ? 60 : 30);
     }
     worker->health.state = "starting";
     auto* raw = worker.get();

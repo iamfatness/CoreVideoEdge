@@ -157,7 +157,7 @@ Pro input stays wired when the guest in a slot changes.
 - **SRT**: in Pro, turn on SRT inputs (listener mode; input n listens on
   `10000 + n - 1` by default). On Edge set Pro's address, the base port,
   latency (Pro's default 120 ms) and an optional passphrase (same on both
-  sides). Each slot calls Pro's matching port: 1080p H.264 at 30 fps + AAC.
+  sides). Each slot calls Pro's matching port: 1080p H.264 at the slot's rate (30, or 60 when the slot is set to 60) + AAC.
   Needs FFmpeg on the Edge machine (PATH or `COREVIDEO_FFMPEG_DIR`).
 - Pro re-stamps incoming NDI/SRT media on its own clock; Pro's per-input audio
   offset (+-500 ms) is the trim if a feed needs one.
@@ -190,18 +190,22 @@ free and the REC tally; failures sit in a banner under it until they clear.
    the host for record permission). It shows Requesting until the engine
    reports raw media active. Tokens also work: `COREVIDEO_ZOOM_ON_BEHALF_TOKEN`,
    `COREVIDEO_ZOOM_USER_ZAK`, `COREVIDEO_ZOOM_APP_PRIVILEGE_TOKEN`.
-4. **Routing.** A crosspoint grid with every cell drawn: click a free Subscribe
-   cell to route a guest to that slot (up to the cap of 8), the ISO band arms
-   that slot's ISO. **Zoom feed** (1080p / 720p / 360p) in the toolbar sets
-   what new routes ask Zoom for; each routed row has its own picker and shows
-   the size Zoom actually delivers (amber when below the request, with a
-   plain note when the SDK refused a tier). Cells stay pending until the node
+4. **Routing.** A crosspoint grid with every cell live: click a cell to take
+   that guest to that slot (routing them, moving them from another slot, or
+   replacing whoever held it; up to the cap of 8); an ISO cell on another
+   column does the same with the ISO armed. **Zoom feed** (1080p / 720p /
+   360p) and **Rate** (Source / 30 / 60) in the toolbar set what new routes
+   use; each routed row has its own pickers. Zoom can only be asked for a
+   resolution: the rate paces that slot's ISO and SRT feed. The size Zoom
+   delivers shows once, under each slot (amber when below the request, with a
+   plain note on the row when the SDK refused a tier). Cells stay pending until the node
    confirms; refusals appear on the row. **Send to Pro** sends every routed slot to CoreVideo Pro over NDI or
    SRT (see `docs/PROTOCOL.md` `set-feeds`).
-5. **Monitor.** One tile per routed slot from the node's preview files
+5. **Monitor.** Tiles scale with the window (every routed guest on screen,
+   as large as the window allows). One tile per routed slot from the node's preview files
    (`docs/PROTOCOL.md` "Preview frames"): picture, measured fps and size,
    audio meter, ISO and feed health. Enter opens a larger view.
-6. **Record.** Folder, file prefix, 1080p | 720p and Source | 30 | 60, then
+6. **Record.** Folder, file prefix, 1080p | 720p (the frame rate is per slot, on Routing), then
    **Start recording**. The table shows frames, lost, held, cadence and size per
    ISO. **Stop recording** (confirmed) finalizes every file and the manifest.
 

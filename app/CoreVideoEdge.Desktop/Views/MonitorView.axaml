@@ -105,7 +105,7 @@
     <ScrollViewer IsVisible="{Binding !Empty}">
       <ItemsControl x:Name="TileGrid" ItemsSource="{Binding Tiles}" Margin="12">
         <ItemsControl.ItemsPanel>
-          <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" ItemWidth="400" /></ItemsPanelTemplate>
+          <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" ItemWidth="400" HorizontalAlignment="Center" /></ItemsPanelTemplate>
         </ItemsControl.ItemsPanel>
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="vm:TileViewModel">

@@ -129,7 +129,7 @@ public sealed class ViewModelCommandTests
         var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
         var cell = bo.SubscribeCells[4];                       // the operator picks S5
         await vm.Routing.ToggleAsync(cell);
-        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true,"slot":5,"resolution":1080}""", node.Sent.Single());
+        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true,"slot":5,"resolution":1080,"fps":0}""", node.Sent.Single());
         // The pending mark sits on the crosspoint that was picked, never "routed" yet.
         Assert.Equal(CellState.Pending, bo.SubscribeCells[4].State);
         Assert.DoesNotContain(bo.SubscribeCells, c => c.State == CellState.Routed);
@@ -140,7 +140,7 @@ public sealed class ViewModelCommandTests
         Assert.Equal(CellState.Routed, bo.SubscribeCells[4].State);
         // The other crosspoints stay drawn (owner 2026-11-09): never hidden.
         Assert.DoesNotContain(bo.SubscribeCells, c => c.State == CellState.Hidden);
-        Assert.Equal(CellState.Unavailable, bo.SubscribeCells[1].State);
+        Assert.Equal(CellState.Empty, bo.SubscribeCells[1].State);         // still live: a click moves Bo
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public sealed class ViewModelCommandTests
             Assert.DoesNotContain(row.SubscribeCells.Concat(row.IsoCells), c => !c.IsVisible);
         }
         var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
-        Assert.Equal(CellState.Unavailable, bo.SubscribeCells[0].State);   // S1 carries Ann
+        Assert.Equal(CellState.Empty, bo.SubscribeCells[0].State);         // S1 carries Ann: a click replaces her
         Assert.Contains("Ann", bo.SubscribeCells[0].Tip);
         Assert.Equal(CellState.Empty, bo.SubscribeCells[7].State);
     }
@@ -165,7 +165,7 @@ public sealed class ViewModelCommandTests
         vm.Routing.DefaultResolution = 720;
         var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
         await vm.Routing.ToggleAsync(bo.SubscribeCells[1]);
-        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true,"slot":2,"resolution":720}""", node.Sent.Single());
+        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true,"slot":2,"resolution":720,"fps":0}""", node.Sent.Single());
     }
 
     [Fact]
@@ -234,7 +234,7 @@ public sealed class ViewModelCommandTests
         var ann = vm.Routing.Rows.Single(r => r.Name == "Ann");
         Assert.Equal(CellState.Armed, ann.IsoCells[0].State);
         // Every crosspoint stays drawn; only this guest's ISO column is live.
-        Assert.All(ann.IsoCells.Skip(1), c => Assert.Equal(CellState.Unavailable, c.State));
+        Assert.All(ann.IsoCells.Skip(1), c => Assert.True(c.IsInteractive)); // a click routes Ann there
         await vm.Routing.ToggleAsync(ann.IsoCells[0]);
         Assert.Equal("""{"cmd":"iso","slot":1,"on":false}""", node.Sent.Single());
     }
@@ -276,11 +276,59 @@ public sealed class ViewModelCommandTests
     {
         var (vm, node, _) = Make(InMeeting);
         await vm.Record.SetHeightCommand.ExecuteAsync(720);
-        Assert.Equal("""{"cmd":"set-record-format","height":720,"fps":0}""", node.Sent[0]);
+        // Height only: the frame rate is per slot on Routing now.
+        Assert.Equal("""{"cmd":"set-record-format","height":720}""", node.Sent[0]);
         Assert.True(vm.Record.Is720);                           // shown as pending selection
         Assert.True(vm.Record.FormatPending);
-        await vm.Record.SetFpsCommand.ExecuteAsync(60);
-        Assert.Equal("""{"cmd":"set-record-format","height":1080,"fps":60}""", node.Sent[1]);
+    }
+
+    [Fact]
+    public async Task FrameRateDefaultGoesWithNewRoutesAndEachSlotCanChangeIt()
+    {
+        var (vm, node, _) = Make(InMeeting);
+        vm.Routing.DefaultFps = 60;
+        var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
+        await vm.Routing.ToggleAsync(bo.SubscribeCells[1]);
+        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true,"slot":2,"resolution":1080,"fps":60}""", node.Sent[0]);
+
+        var ann = vm.Routing.Rows.Single(r => r.Name == "Ann");
+        Assert.Equal(0, ann.Fps);                               // node default: as Zoom sends
+        ann.Fps = 30;
+        await vm.Routing.LastResolutionSend!;
+        Assert.Equal("""{"cmd":"set-fps","slot":1,"fps":30}""", node.Sent[1]);
+    }
+
+    [Fact]
+    public async Task ARoutedGuestsOtherCellsAreLiveAndMoveThem()
+    {
+        var (vm, node, _) = Make(InMeeting);
+        var ann = vm.Routing.Rows.Single(r => r.Name == "Ann");
+        Assert.All(ann.SubscribeCells.Skip(1), c => Assert.True(c.IsInteractive));
+        await vm.Routing.ToggleAsync(ann.SubscribeCells[3]);
+        // A move carries the guest's own settings: no resolution/fps sent.
+        Assert.Equal("""{"cmd":"subscribe","participantId":101,"on":true,"slot":4}""", node.Sent.Single());
+        Assert.Equal(CellState.Pending, ann.SubscribeCells[3].State);
+    }
+
+    [Fact]
+    public async Task AnIsoCellOnAnotherColumnRoutesThere()
+    {
+        var (vm, node, _) = Make(InMeeting);
+        var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
+        Assert.True(bo.IsoCells[2].IsInteractive);
+        await vm.Routing.ToggleAsync(bo.IsoCells[2]);
+        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true,"slot":3,"resolution":1080,"fps":0}""", node.Sent.Single());
+    }
+
+    [Fact]
+    public async Task ClickingShowsNoPendingTextLine()
+    {
+        var (vm, _, _) = Make(InMeeting);
+        var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
+        vm.Routing.Rows.ToList();
+        var task = vm.Routing.ToggleAsync(bo.SubscribeCells[1]);
+        Assert.False(bo.HasDetail);                             // no line appears under the row
+        await task;
     }
 
     [Fact]

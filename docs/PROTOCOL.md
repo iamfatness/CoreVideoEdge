@@ -22,8 +22,9 @@ Every command may carry an `"id"`; the reply echoes it:
 |---|---|---|
 | `join` | `meeting` (link or ID), optional `passcode`, `displayName`, `sdkJwt`, `userZak`, `onBehalfToken`, `appPrivilegeToken`, `endOtherMeeting` | Joins capture-only: camera off, own mic muted. Tokens fall back to `COREVIDEO_ZOOM_SDK_JWT`, `COREVIDEO_ZOOM_USER_ZAK`, `COREVIDEO_ZOOM_ON_BEHALF_TOKEN`, `COREVIDEO_ZOOM_APP_PRIVILEGE_TOKEN`; with no JWT, `COREVIDEO_ZOOM_PUBLIC_APP_KEY` or Pro's public app key. Tokens are never logged and are dropped once sent to the engine. `endOtherMeeting:true` only after a same-account collision, and only because the operator asked. |
 | `leave` | | Stops a take first (files finalize). |
-| `subscribe` | `participantId`, `on` (default true), `slot` (optional, 1..cap; omitted = lowest free), `resolution` (optional: 1080 default, 720, 360) | Video at the requested Zoom feed + isolated audio. Refused past the cap, for a taken or out-of-cap slot, for any other resolution, for this node itself, and to turn off a source whose ISO is recording. |
+| `subscribe` | `participantId`, `on` (default true), `slot` (optional, 1..cap; omitted = lowest free), `resolution` (optional: 1080 default, 720, 360), `fps` (optional: 0 = as Zoom sends (default), 30, 60) | Video at the requested Zoom feed + isolated audio. A named `slot` is a crosspoint take: a guest routed elsewhere MOVES there (keeping their resolution, rate and ISO arm), and whoever held the slot is REPLACED. Refused past the cap, for an out-of-cap slot, for other resolutions/rates, for this node itself, and when the move or replacement would touch a slot whose ISO is recording (or to turn off such a source). |
 | `set-resolution` | `slot`, `resolution` (1080, 720, 360) | Re-subscribes that slot at the new Zoom feed (an unsubscribe then a subscribe). Refused while that slot's ISO is recording. |
+| `set-fps` | `slot`, `fps` (0, 30, 60) | The slot's output rate: its ISO file and its SRT feed (0 paces SRT at 30). Zoom cannot be asked for a frame rate; 0 records as the guest sends. Refused while that slot's ISO is recording; an SRT feed restarts at the new rate. |
 | `unsubscribe-slot` | `slot` | Frees a slot (typically one held for a guest who left). Refused while that slot's ISO is recording. |
 | `iso` | `slot`, `on` | Whether the subscribed source gets an ISO. Fixed while recording. |
 | `set-record-folder` | `path` | Not while recording. |
@@ -32,7 +33,7 @@ Every command may carry an `"id"`; the reply echoes it:
 | `record-stop` | | Finalizes every file in parallel, rewrites `manifest.json`. |
 | `engine` | `on` (default true) | Engine On: `true` asks Zoom for raw media (and asks the host for record permission when this account lacks it); `false` releases it. Refused off while recording. Applies when next in a meeting if sent before joining. The routing is re-sent automatically when raw media returns. |
 | `set-feeds` | `mode` (`off`/`ndi`/`srt`), `srtHost`, `srtBasePort` (10000), `srtLatencyMs` (120), `srtPassphrase` | Live feeds of every routed slot to CoreVideo Pro. NDI source `CoreVideo Edge <node> S<n>`; SRT caller to `srtHost:srtBasePort+n-1` (Pro's SRT input listeners). The passphrase is never logged or published. Refused with the reason when the NDI runtime or FFmpeg is missing. |
-| `set-record-format` | `height` (1080 or 720), `fps` (0 = as Zoom delivers, 30, 60) | 16:9 at that height. Constant 30/60 snaps every frame to the grid; repeats and skips are counted. Not while recording. |
+| `set-record-format` | `height` (1080 or 720) | 16:9 at that height. Not while recording. The frame rate is per slot (`set-fps`); a non-zero `fps` here is refused. Constant 30/60 snaps every frame to the grid; repeats and skips are counted. |
 | `state` | | Publish a state line now. |
 | `quit` | | Stops any take, leaves, exits. End of stdin does the same. |
 
@@ -63,6 +64,7 @@ estimated or defaulted for display.
   ],
   "subscriptions": [ { "slot": 1, "participantId": 16778240, "name": "Alice", "present": true, "iso": true, "fromConfig": false,
                        "resolution": 1080,                          // the Zoom feed this slot asks for
+                       "fps": 0,                                    // ISO + SRT rate: 0 = as Zoom sends, 30, 60
                        "zoom": { "granted": 720, "refused": 1080, "refusedCode": 12 } } ],  // what the SDK accepted
   "recording": {
     "active": true, "startedUtc": "2026-11-08T22:01:05.123Z", "elapsedMs": 61000,
@@ -101,7 +103,7 @@ estimated or defaulted for display.
 - `movingRooms: true` while Zoom is moving this node between breakout rooms (or
   reconnecting). The take, the engine and the routing slots are kept; guests
   re-attach when the new room's roster arrives.
-- `recordFormat`: `{ "width": 1920, "height": 1080, "fps": 0 }`.
+- `recordFormat`: `{ "width": 1920, "height": 1080 }` (the rate is per slot: `subscriptions[].fps`).
 - `subscriptions[].zoom`: what the SDK's `subscribe()` accepted, from the
   engine's `video_subscribe` lines. `granted` is the tier it accepted; the
   engine falls back 1080 -> 720 -> 360 when a tier is refused, and then
