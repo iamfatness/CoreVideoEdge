@@ -22,7 +22,11 @@ public sealed record EdgeParticipant(
     double? ReceivedFps = null,      // v2: measured over the last second by the preview reader
     double? AudioDb = null);         // v2: isolated-audio peak dBFS over ~100 ms
 
-public sealed record EdgeSubscription(int Slot, uint ParticipantId, string Name, bool Present, bool Iso, bool FromConfig);
+// Resolution: the Zoom feed this slot asks for (1080/720/360). Zoom*: what the
+// SDK's subscribe() accepted (the engine falls back a tier on refusal), absent
+// until the engine reported it. Delivered size is on the participant.
+public sealed record EdgeSubscription(int Slot, uint ParticipantId, string Name, bool Present, bool Iso, bool FromConfig,
+    int Resolution = 1080, int? ZoomGranted = null, int? ZoomRefused = null, int? ZoomRefusedCode = null, bool ZoomFailed = false);
 
 public sealed record EdgeIsoStream(
     int Index,
@@ -130,6 +134,8 @@ public sealed record EdgeState
             e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
         static long? LN(JsonElement e, string name) => DN(e, name) is double d ? (long)d : null;
         static long L(JsonElement e, string name) => LN(e, name) ?? 0;
+        static JsonElement? Zoom(JsonElement e) =>
+            e.TryGetProperty("zoom", out var z) && z.ValueKind == JsonValueKind.Object ? z : null;
         static IReadOnlyList<string> Strings(JsonElement e, string name) =>
             e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
                 ? v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToList()
@@ -155,7 +161,12 @@ public sealed record EdgeState
 
         var subscriptions = root.TryGetProperty("subscriptions", out var subs) && subs.ValueKind == JsonValueKind.Array
             ? subs.EnumerateArray().Select(s => new EdgeSubscription(
-                (int)L(s, "slot"), (uint)L(s, "participantId"), S(s, "name"), B(s, "present"), B(s, "iso"), B(s, "fromConfig"))).ToList()
+                (int)L(s, "slot"), (uint)L(s, "participantId"), S(s, "name"), B(s, "present"), B(s, "iso"), B(s, "fromConfig"),
+                (int)(LN(s, "resolution") ?? 1080),
+                Zoom(s) is { } z ? (int?)LN(z, "granted") : null,
+                Zoom(s) is { } z2 ? (int?)LN(z2, "refused") : null,
+                Zoom(s) is { } z3 ? (int?)LN(z3, "refusedCode") : null,
+                Zoom(s) is { } z4 && B(z4, "failed"))).ToList()
             : new List<EdgeSubscription>();
 
         bool recording = false;

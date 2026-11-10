@@ -22,7 +22,8 @@ Every command may carry an `"id"`; the reply echoes it:
 |---|---|---|
 | `join` | `meeting` (link or ID), optional `passcode`, `displayName`, `sdkJwt`, `userZak`, `onBehalfToken`, `appPrivilegeToken`, `endOtherMeeting` | Joins capture-only: camera off, own mic muted. Tokens fall back to `COREVIDEO_ZOOM_SDK_JWT`, `COREVIDEO_ZOOM_USER_ZAK`, `COREVIDEO_ZOOM_ON_BEHALF_TOKEN`, `COREVIDEO_ZOOM_APP_PRIVILEGE_TOKEN`; with no JWT, `COREVIDEO_ZOOM_PUBLIC_APP_KEY` or Pro's public app key. Tokens are never logged and are dropped once sent to the engine. `endOtherMeeting:true` only after a same-account collision, and only because the operator asked. |
 | `leave` | | Stops a take first (files finalize). |
-| `subscribe` | `participantId`, `on` (default true) | 1080p video + isolated audio. Refused past the cap, refused for this node itself, refused to turn off a source whose ISO is recording. |
+| `subscribe` | `participantId`, `on` (default true), `slot` (optional, 1..cap; omitted = lowest free), `resolution` (optional: 1080 default, 720, 360) | Video at the requested Zoom feed + isolated audio. Refused past the cap, for a taken or out-of-cap slot, for any other resolution, for this node itself, and to turn off a source whose ISO is recording. |
+| `set-resolution` | `slot`, `resolution` (1080, 720, 360) | Re-subscribes that slot at the new Zoom feed (an unsubscribe then a subscribe). Refused while that slot's ISO is recording. |
 | `unsubscribe-slot` | `slot` | Frees a slot (typically one held for a guest who left). Refused while that slot's ISO is recording. |
 | `iso` | `slot`, `on` | Whether the subscribed source gets an ISO. Fixed while recording. |
 | `set-record-folder` | `path` | Not while recording. |
@@ -60,7 +61,9 @@ estimated or defaulted for display.
       "slot": 1, "iso": true,         // only when subscribed
       "received": { "width": 1920, "height": 1080, "msSinceFrame": 400, "receiving": true } }
   ],
-  "subscriptions": [ { "slot": 1, "participantId": 16778240, "name": "Alice", "present": true, "iso": true, "fromConfig": false } ],
+  "subscriptions": [ { "slot": 1, "participantId": 16778240, "name": "Alice", "present": true, "iso": true, "fromConfig": false,
+                       "resolution": 1080,                          // the Zoom feed this slot asks for
+                       "zoom": { "granted": 720, "refused": 1080, "refusedCode": 12 } } ],  // what the SDK accepted
   "recording": {
     "active": true, "startedUtc": "2026-11-08T22:01:05.123Z", "elapsedMs": 61000,
     "sessionDir": "D:\\EdgeISO\\edge01-20261108-220105",
@@ -99,6 +102,15 @@ estimated or defaulted for display.
   reconnecting). The take, the engine and the routing slots are kept; guests
   re-attach when the new room's roster arrives.
 - `recordFormat`: `{ "width": 1920, "height": 1080, "fps": 0 }`.
+- `subscriptions[].zoom`: what the SDK's `subscribe()` accepted, from the
+  engine's `video_subscribe` lines. `granted` is the tier it accepted; the
+  engine falls back 1080 -> 720 -> 360 when a tier is refused, and then
+  `refused`/`refusedCode` name the last refusal. `failed: true` = no tier was
+  accepted. Absent until the engine reports. A granted 1080 with
+  `received.height` 720 means Zoom is SENDING 720p on an accepted 1080p
+  subscription (the guest's camera, client or HD settings, or Zoom's choice),
+  not that Edge asked for less. Each outcome is also logged as
+  `[zoom-subscribe]` in the node log.
 - `previewDir`: folder holding one preview file per routed slot (below).
 - `participants[].received.fps`: frames per second measured over the last
   second from the preview reader (absent until measured).
@@ -163,5 +175,6 @@ so. Nothing in this file is estimated.
 Edge speaks CoreVideo Pro's engine protocol unchanged (`native/zoom-engine`,
 `shared/engine-ipc.h`) plus one join field, `"capture_only":true`
 (see `native/zoom-engine/README.md`). Per subscribed slot it sends
-`subscribe` (resolution 2 = 1080p), `subscribe_audio` with
+`subscribe` (resolution 2 = 1080p, 1 = 720p, 0 = 360p, from the slot's
+`resolution`), `subscribe_audio` with
 `isolate_audio:true`, and during a take `iso_video` with the take's ring epoch.

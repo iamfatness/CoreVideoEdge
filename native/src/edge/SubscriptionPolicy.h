@@ -6,9 +6,11 @@
 // downlink budget on the guests CoreVideo Pro is not pulling. So:
 //   - never auto-subscribe the meeting; only explicit operator picks and names
 //     listed in the node's config file are subscribed;
-//   - a hard cap (default 6 simultaneous 1080p subscriptions) is enforced here,
+//   - a hard cap (default 8 simultaneous subscriptions) is enforced here,
 //     not in the UI, so no caller can exceed it;
-//   - resolution is never traded for count: every subscription asks for 1080p.
+//   - resolution is never traded for count automatically: every subscription
+//     asks for 1080p unless the operator explicitly picks 720p or 360p for
+//     that slot (owner, 2026-11-09).
 //
 // A selection owns a stable SLOT (edge-s1..edge-sN). The slot, not the Zoom
 // user id, names the engine's shared-memory regions. When a selected guest
@@ -45,7 +47,13 @@ struct Selection {
   bool present = true;            // false: the guest left; slot held for a rejoin
   bool iso = true;                // record an ISO for this source
   bool fromConfig = false;
+  int height = 1080;              // Zoom feed requested: 1080 | 720 | 360
 };
+
+inline bool isZoomFeedHeight(int height) { return height == 1080 || height == 720 || height == 360; }
+// The engine's subscribe "resolution": 0 = 360p, 1 = 720p, 2 = 1080p.
+inline int engineResolutionForHeight(int height) { return height == 360 ? 0 : height == 720 ? 1 : 2; }
+inline int heightForEngineResolution(int resolution) { return resolution == 0 ? 360 : resolution == 1 ? 720 : 1080; }
 
 struct SubscriptionAction {
   enum class Kind { Subscribe, Unsubscribe };
@@ -88,18 +96,29 @@ class SubscriptionBook {
 
   // Operator subscribe/unsubscribe. Returns an empty string on success or the
   // refusal the operator sees. `out` receives the engine actions.
+  // `slot` 0 = lowest free; otherwise that exact slot or a refusal.
   std::string request(const RosterEntry& who, bool on, std::vector<SubscriptionAction>& out,
-                      const std::string& reason = "operator") {
+                      const std::string& reason = "operator", int slot = 0, int height = 1080) {
     if (who.id == 0) return "Unknown participant.";
     if (who.isMe) return "This Edge node cannot subscribe to itself.";
     if (on) {
       if (findByParticipant(who.id)) return {};  // already subscribed: idempotent
       if (static_cast<int>(selections_.size()) >= cap_) {
         return "This Edge node is at its limit of " + std::to_string(cap_) +
-               " simultaneous 1080p subscriptions. Unsubscribe someone first, or add another Edge node.";
+               " simultaneous subscriptions. Unsubscribe someone first, or add another Edge node.";
+      }
+      if (!isZoomFeedHeight(height)) return "Zoom feed resolution must be 1080, 720 or 360.";
+      if (slot != 0) {
+        if (slot < 1 || slot > cap_) {
+          return "Slot S" + std::to_string(slot) + " is outside this node's " + std::to_string(cap_) + " slots.";
+        }
+        if (const auto* taken = findBySlot(slot)) {
+          return "S" + std::to_string(slot) + " carries " + taken->displayName + ". Choose a free slot.";
+        }
       }
       Selection s;
-      s.slot = lowestFreeSlot();
+      s.slot = slot != 0 ? slot : lowestFreeSlot();
+      s.height = height;
       s.participantId = who.id;
       s.displayName = who.name;
       s.fromConfig = reason == "config";
@@ -125,6 +144,22 @@ class SubscriptionBook {
         selections_.erase(it);
         return {};
       }
+    }
+    return "No subscription in slot " + std::to_string(slot) + ".";
+  }
+
+  // Re-subscribe one slot at a new Zoom feed resolution.
+  std::string setHeight(int slot, int height, std::vector<SubscriptionAction>& out) {
+    if (!isZoomFeedHeight(height)) return "Zoom feed resolution must be 1080, 720 or 360.";
+    for (auto& s : selections_) {
+      if (s.slot != slot) continue;
+      if (s.height == height) return {};
+      s.height = height;
+      if (s.present) {
+        out.push_back({SubscriptionAction::Kind::Unsubscribe, slot, s.participantId, "resolution"});
+        out.push_back({SubscriptionAction::Kind::Subscribe, slot, s.participantId, "resolution"});
+      }
+      return {};
     }
     return "No subscription in slot " + std::to_string(slot) + ".";
   }

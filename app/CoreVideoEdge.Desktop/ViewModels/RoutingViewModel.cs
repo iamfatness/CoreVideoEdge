@@ -103,6 +103,23 @@ public sealed class ParticipantRowViewModel : ObservableObject
     public bool DetailIsError { get => _detailIsError; set => Set(ref _detailIsError, value); }
     public bool HasDetail => !string.IsNullOrEmpty(_detail);
 
+    // The Zoom feed this guest's slot asks for (routed rows only). Set by the
+    // operator through the picker (sends set-resolution) or by the node's state
+    // (SetResolutionFromNode, which never sends).
+    private int _resolution = 1080;
+    private bool _offeredBelow;
+    private string _offeredTip = "";
+    internal Action<ParticipantRowViewModel, int>? ResolutionPicked { get; set; }
+    public static IReadOnlyList<int> ResolutionOptions { get; } = [1080, 720, 360];
+    public int Resolution
+    {
+        get => _resolution;
+        set { if (Set(ref _resolution, value)) ResolutionPicked?.Invoke(this, value); }
+    }
+    internal void SetResolutionFromNode(int value) => Set(ref _resolution, value, nameof(Resolution));
+    public bool OfferedBelowAsked { get => _offeredBelow; set => Set(ref _offeredBelow, value); }
+    public string OfferedTip { get => _offeredTip; set => Set(ref _offeredTip, value); }
+
     public string DisplayName => _self ? $"{_name} (this node)" : _host ? $"{_name} (host)" : _name;
     public bool HasSlot => _slot is not null;
     public string SlotTag => _slot is int s ? $"S{s}" : "";
@@ -145,9 +162,10 @@ public sealed class RoutingViewModel : ObservableObject
     private static readonly TimeSpan FailedFor = TimeSpan.FromSeconds(12);
     private readonly MainViewModel _main;
     private readonly Dictionary<uint, ParticipantRowViewModel> _byId = new();
-    private readonly Dictionary<uint, (bool On, TimeSpan At)> _pendingSub = new();
+    private readonly Dictionary<uint, (bool On, int Slot, TimeSpan At)> _pendingSub = new();
     private readonly Dictionary<int, (bool On, TimeSpan At)> _pendingIso = new();
-    private readonly Dictionary<uint, (string Error, TimeSpan At)> _failedSub = new();
+    private readonly Dictionary<uint, (string Error, int Slot, TimeSpan At)> _failedSub = new();
+    private int _defaultResolution = 1080;
     private readonly Dictionary<int, (string Error, TimeSpan At)> _failedIso = new();
     private bool _videoOnOnly = true;
     private string _search = "";
@@ -166,9 +184,49 @@ public sealed class RoutingViewModel : ObservableObject
         ShowSubscribeBandCommand = new RelayCommand(() => ShowIsoBand = false);
         ShowIsoBandCommand = new RelayCommand(() => ShowIsoBand = true);
         FreeSlotCommand = new RelayCommand(p => { if (p is int slot) _ = FreeDepartedSlotAsync(slot); });
+        Feed1080Command = new RelayCommand(() => DefaultResolution = 1080);
+        Feed720Command = new RelayCommand(() => DefaultResolution = 720);
+        Feed360Command = new RelayCommand(() => DefaultResolution = 360);
     }
 
     public ICommand FreeSlotCommand { get; }
+
+    // The Zoom feed new routes ask for (owner 2026-11-09: chosen on Routing).
+    // 1080p unless the operator explicitly picks less; each routed slot then
+    // carries its own value, changed from its row.
+    public int DefaultResolution
+    {
+        get => _defaultResolution;
+        set
+        {
+            if (!ParticipantRowViewModel.ResolutionOptions.Contains(value) || !Set(ref _defaultResolution, value)) return;
+            Raise(nameof(Feed1080)); Raise(nameof(Feed720)); Raise(nameof(Feed360));
+        }
+    }
+    public bool Feed1080 => _defaultResolution == 1080;
+    public bool Feed720 => _defaultResolution == 720;
+    public bool Feed360 => _defaultResolution == 360;
+    public ICommand Feed1080Command { get; }
+    public ICommand Feed720Command { get; }
+    public ICommand Feed360Command { get; }
+    // The most recent set-resolution send (tests await it).
+    public Task? LastResolutionSend { get; private set; }
+
+    private void OnResolutionPicked(ParticipantRowViewModel row, int height)
+    {
+        if (row.Slot is not int slot) return;
+        LastResolutionSend = SendResolutionAsync(row, slot, height);
+    }
+
+    private async Task SendResolutionAsync(ParticipantRowViewModel row, int slot, int height)
+    {
+        var result = await _main.SendAsync("set-resolution", new { slot, resolution = height });
+        if (!result.Ok)
+        {
+            _failedSub[row.Id] = (result.Error ?? "The node refused.", slot, _main.Clock.Now);
+            Rebuild();   // the picker returns to the node's value with the next state line
+        }
+    }
 
     public FeedsViewModel Feeds { get; }
     public ObservableCollection<ParticipantRowViewModel> Rows { get; } = new();
@@ -312,7 +370,7 @@ public sealed class RoutingViewModel : ObservableObject
             var p = visible[index];
             if (!_byId.TryGetValue(p.Id, out var row))
             {
-                row = new ParticipantRowViewModel(p.Id);
+                row = new ParticipantRowViewModel(p.Id) { ResolutionPicked = OnResolutionPicked };
                 _byId[p.Id] = row;
             }
             EnsureCells(row);
@@ -344,61 +402,81 @@ public sealed class RoutingViewModel : ObservableObject
         row.Self = p.Self;
         row.Slot = p.Slot;
         row.Iso = p.Slot is not null && p.Iso;
-        row.Offered = p.ReceivedWidth is int w && p.ReceivedHeight is int h
-            ? Format.Size(w, h) + (p.Receiving ? "" : " stalled")
-            : "";
+        var sub = p.Slot is int mine ? s.Subscriptions.FirstOrDefault(x => x.Slot == mine) : null;
+        if (sub is not null) row.SetResolutionFromNode(sub.Resolution);
+        string? zoomNote = null;
+        if (p.ReceivedWidth is int w && p.ReceivedHeight is int h)
+        {
+            row.Offered = Format.Size(w, h) + (p.Receiving ? "" : " stalled");
+            var asked = sub?.Resolution ?? 1080;
+            row.OfferedBelowAsked = h < asked;
+            row.OfferedTip = sub?.ZoomGranted is int granted
+                ? $"Asked for {asked}p. Zoom accepted {granted}p and is sending {Format.Size(w, h)}." +
+                  (h < granted ? " What Zoom sends on an accepted subscription is decided by the guest's camera, client and HD settings, and by Zoom." : "")
+                : $"Asked for {asked}p. Receiving {Format.Size(w, h)}.";
+        }
+        else
+        {
+            row.Offered = "";
+            row.OfferedBelowAsked = false;
+            row.OfferedTip = "";
+        }
+        if (sub is { ZoomFailed: true })
+            zoomNote = "Zoom refused every video resolution for this guest.";
+        else if (sub is { ZoomRefused: int refused } && sub.ZoomGranted is int got && got < sub.Resolution)
+            zoomNote = $"The Zoom SDK refused {refused}p for this guest (code {sub.ZoomRefusedCode}); subscribed at {got}p.";
 
-        var pendingSub = _pendingSub.TryGetValue(p.Id, out var ps) ? ps : ((bool On, TimeSpan At)?)null;
-        var failedSub = _failedSub.TryGetValue(p.Id, out var fs) ? fs.Error : null;
-        var nextFree = NextFreeSlot(s);
-        var atCap = nextFree is null;
+        var pendingSub = _pendingSub.TryGetValue(p.Id, out var ps) ? ps : ((bool On, int Slot, TimeSpan At)?)null;
+        var failed = _failedSub.TryGetValue(p.Id, out var fs) ? fs : ((string Error, int Slot, TimeSpan At)?)null;
+        var failedSub = failed?.Error;
+        var atCap = NextFreeSlot(s) is null;
         var recordingThisIso = s.Recording && row.Iso;
 
+        // Every crosspoint is drawn (owner 2026-11-09). The operator picks the
+        // slot: a free cell routes this guest to THAT slot.
         foreach (var cell in row.SubscribeCells)
         {
             var k = cell.Column;
             var occupant = s.Subscriptions.FirstOrDefault(x => x.Slot == k);
             CellState state;
             string tip;
-            if (pendingSub is { } pend && ((pend.On && k == nextFree) || (!pend.On && p.Slot == k)))
+            if (pendingSub is { } pend && ((pend.On && k == pend.Slot) || (!pend.On && p.Slot == k)))
             {
                 state = CellState.Pending;
                 tip = pend.On ? $"Routing {p.Name} to S{k}. Waiting for the node to confirm." : $"Unrouting {p.Name} from S{k}.";
             }
             else if (p.Slot == k)
             {
-                state = recordingThisIso ? CellState.Unavailable : CellState.Routed;
+                state = CellState.Routed;  // while its ISO records the click is refused with the reason
                 tip = recordingThisIso
                     ? $"{p.Name} is on S{k} and its ISO is recording. Stop recording to unroute."
                     : $"{p.Name} is on S{k}. Select to unroute.";
-                if (recordingThisIso) state = CellState.Routed;  // shown routed; the click is refused below
             }
-            else if (p.Slot is not null)
-            {
-                state = CellState.Hidden;
-                tip = "";
-            }
-            else if (failedSub is not null && k == (nextFree ?? k))
+            else if (failed is { } f && f.Slot == k)
             {
                 state = CellState.Failed;
-                tip = failedSub;
-            }
-            else if (atCap)
-            {
-                state = CellState.Unavailable;
-                tip = $"All {s.MaxSubscriptions} slots in use. Unroute one first.";
+                tip = f.Error;
             }
             else if (occupant is not null)
             {
                 state = CellState.Unavailable;
                 tip = $"S{k} carries {occupant.Name}.";
             }
+            else if (p.Slot is int at)
+            {
+                state = CellState.Unavailable;
+                tip = $"{p.Name} is on S{at}. Unroute them there first to use S{k}.";
+            }
+            else if (atCap)
+            {
+                state = CellState.Unavailable;
+                tip = $"All {s.MaxSubscriptions} slots in use. Unroute one first.";
+            }
             else
             {
                 state = CellState.Empty;
-                tip = $"Route {p.Name}. The node assigns the next free slot (S{nextFree}).";
+                tip = $"Route {p.Name} to S{k} at {_defaultResolution}p.";
             }
-            if (p.Slot is not null && p.Slot != k) state = CellState.Hidden;
             cell.State = state;
             cell.Tip = tip;
             cell.AccessibleName = $"Subscribe, {p.Name}, slot {k}: {Words(state)}";
@@ -412,8 +490,12 @@ public sealed class RoutingViewModel : ObservableObject
             string tip;
             if (p.Slot != k)
             {
-                state = CellState.Hidden;
-                tip = "";
+                // Drawn, not live: an ISO records a routed slot, so only this
+                // guest's own column can arm.
+                state = CellState.Unavailable;
+                tip = p.Slot is int at
+                    ? $"{p.Name}'s ISO is I{at}."
+                    : $"Route {p.Name} to a slot to arm an ISO.";
             }
             else if (_pendingIso.TryGetValue(k, out var pi))
             {
@@ -441,8 +523,8 @@ public sealed class RoutingViewModel : ObservableObject
             cell.AccessibleName = $"ISO, {p.Name}, slot {k}: {Words(state)}";
         }
 
-        row.Detail = failedSub ?? failedIso ?? (pendingSub is not null ? "Waiting for the node…" : null);
-        row.DetailIsError = failedSub is not null || failedIso is not null;
+        row.Detail = failedSub ?? failedIso ?? (pendingSub is not null ? "Waiting for the node…" : zoomNote);
+        row.DetailIsError = failedSub is not null || failedIso is not null || (pendingSub is null && zoomNote is not null);
     }
 
     private void ApplyHeaders(EdgeState s)
@@ -498,18 +580,20 @@ public sealed class RoutingViewModel : ObservableObject
             var on = row.Slot is null;
             if (!on && s.Recording && row.Iso)
             {
-                _failedSub[row.Id] = ($"{row.Name}'s ISO is recording. Stop recording before unrouting.", _main.Clock.Now);
+                _failedSub[row.Id] = ($"{row.Name}'s ISO is recording. Stop recording before unrouting.", cell.Column, _main.Clock.Now);
                 Rebuild();
                 return;
             }
             _failedSub.Remove(row.Id);
-            _pendingSub[row.Id] = (on, _main.Clock.Now);
+            _pendingSub[row.Id] = (on, cell.Column, _main.Clock.Now);
             Rebuild();
-            var result = await _main.SendAsync("subscribe", new { participantId = row.Id, on });
+            var result = on
+                ? await _main.SendAsync("subscribe", new { participantId = row.Id, on, slot = cell.Column, resolution = _defaultResolution })
+                : await _main.SendAsync("subscribe", new { participantId = row.Id, on });
             if (!result.Ok)
             {
                 _pendingSub.Remove(row.Id);
-                _failedSub[row.Id] = (result.Error ?? "The node refused.", _main.Clock.Now);
+                _failedSub[row.Id] = (result.Error ?? "The node refused.", cell.Column, _main.Clock.Now);
             }
             Rebuild();
         }

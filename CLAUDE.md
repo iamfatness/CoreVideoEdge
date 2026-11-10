@@ -11,9 +11,15 @@ file in the same change as any substantive work.
   source/30/60), live **feeds to Pro over NDI and SRT** (per routed slot), a
   logo + Pro/Volt-family design, Windows first and designed for macOS.
   Specs: `docs/superpowers/specs/2026-11-09-*`.
+- 2026-11-09 evening (owner): Routing never hides a crosspoint (every S/I
+  cell drawn; unavailable ones recede to the hairline), the operator picks the
+  slot (a free cell routes to THAT slot), and the **Zoom feed resolution**
+  (1080p default / 720p / 360p) is chosen on Routing: a toolbar default for
+  new routes plus a per-slot picker on each routed row (`set-resolution`).
+  Each row shows what Zoom delivered and, when the SDK refused a tier, says so.
 - Still out: compositor, scenes, graphics, program output, streaming, virtual
   camera. Never downgrade resolution automatically to fit more people on one
-  node (720p is only ever an explicit record choice).
+  node: 1080p unless the operator explicitly picks 720p/360p for a slot.
 
 ## Processes
 
@@ -53,6 +59,21 @@ file in the same change as any substantive work.
   non-inheritable, serialize launches.
 - **FFmpeg echoes the full SRT URL (passphrase included).** Never copy its
   lines into state or logs; publish the redacted URL only.
+- **The v1 app wrote `"maxSubscriptions": 6` into every edge.json.** An
+  upgraded machine stayed capped at 6 under the v2 node's default of 8 (owner
+  hit it live). `EdgeSettings.EnsureExists` migrates a v1 file holding exactly
+  6 to 8 once and stamps `configVersion: 2`; a value chosen after that stays.
+- **Requested is not delivered.** The engine asks 1080p and falls back a tier
+  only when `subscribe()` refuses; Zoom may still SEND 720p on a granted
+  1080p subscription. `subscriptions[].zoom` + `[zoom-subscribe]` log lines
+  tell the two apart; the fake reproduces a refusal with
+  `COREVIDEO_FAKE_REFUSE_1080=1` (engine README delta 5). The SDK exposes no
+  receive-side frame-rate request: 60 fps arrives only if the guest sends it.
+- **Changing a slot's resolution is unsubscribe + subscribe.** The fake (and
+  the engine's in-place path) honour only upgrades on a re-subscribe.
+- **Validator `--sources 8` fails the clap check on ISO-08 on main too**
+  (23 video claps vs 10 audio: false video-clap detections on the fake's 8th
+  guest). Pre-existing, not a sync defect; untriaged.
 - **Tooling trap:** in this environment the Bash tool collapses `\\n` inside
   heredocs (python/JS strings and regexes came out with real newlines). Put
   scripted edits with backslashes in a file written by the Write tool, or use

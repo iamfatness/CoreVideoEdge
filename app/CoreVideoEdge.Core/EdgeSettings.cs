@@ -13,11 +13,30 @@ public static class EdgeSettings
 
     public static string DefaultConfigPath => Path.Combine(DataDirectory, "edge.json");
 
+    // configVersion 2 (2026-11-09): the v1 app wrote "maxSubscriptions": 6 as
+    // its default, which pinned every upgraded node below the v2 cap of 8. A
+    // v1 file still holding exactly that default is moved to 8 once; any other
+    // value, or a 6 written after the migration, is the operator's and stays.
+    public const int ConfigVersion = 2;
+
     public static void EnsureExists(string path)
     {
-        if (File.Exists(path)) return;
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, "{\n  \"filePrefix\": \"edge\",\n  \"maxSubscriptions\": 6,\n  \"subscribe\": []\n}\n");
+        if (!File.Exists(path))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "{\n  \"configVersion\": 2,\n  \"filePrefix\": \"edge\",\n  \"maxSubscriptions\": 8,\n  \"subscribe\": []\n}\n");
+            return;
+        }
+        JsonObject? root;
+        try { root = JsonNode.Parse(File.ReadAllText(path))?.AsObject(); }
+        catch (JsonException) { return; }  // never rewrite a file we could not read; the node reports it
+        if (root is null) return;
+        var version = root["configVersion"] is JsonValue v && v.TryGetValue<int>(out var n) ? n : 1;
+        if (version >= ConfigVersion) return;
+        if (root["maxSubscriptions"] is JsonValue cap && cap.TryGetValue<int>(out var c) && c == 6)
+            root["maxSubscriptions"] = 8;
+        root["configVersion"] = ConfigVersion;
+        Write(path, root);
     }
 
     public static void Update(string path, string? recordFolder = null, string? filePrefix = null)
@@ -35,6 +54,11 @@ public static class EdgeSettings
         }
         if (recordFolder is not null) root["recordFolder"] = recordFolder;
         if (filePrefix is not null) root["filePrefix"] = filePrefix;
+        Write(path, root);
+    }
+
+    private static void Write(string path, JsonObject root)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
         File.WriteAllText(temp, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));

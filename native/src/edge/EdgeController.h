@@ -71,6 +71,7 @@ class EdgeController {
   std::string cmdSubscribe(const rpc::Json& c);
   std::string cmdUnsubscribeSlot(const rpc::Json& c);
   std::string cmdIso(const rpc::Json& c);
+  std::string cmdSetResolution(const rpc::Json& c);
   std::string cmdRecordStart();
   std::string cmdRecordStop();
   std::string cmdEngine(const rpc::Json& c);
@@ -129,6 +130,9 @@ class EdgeController {
   int recordFps_ = 0;             // 0 = as Zoom delivers (VFR), 30 | 60 = constant
   struct Received { std::uint32_t width = 0, height = 0; std::chrono::steady_clock::time_point at; };
   std::map<std::string, Received> received_;  // by slot source_uuid, from engine frame beacons
+  // What the SDK's subscribe() accepted per slot (engine debug lines).
+  struct ZoomGrant { int grantedHeight = 0, lastRefusedHeight = 0, lastRefusedCode = 0; bool failed = false; };
+  std::map<std::string, ZoomGrant> zoomGrant_;
 
   SubscriptionBook book_;
   std::string recordFolder_;

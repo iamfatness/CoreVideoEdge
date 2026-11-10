@@ -144,6 +144,8 @@ void EdgeController::handleCommand(const std::string& line) {
     error = cmdLeave();
   } else if (cmd == "subscribe") {
     error = cmdSubscribe(c);
+  } else if (cmd == "set-resolution") {
+    error = cmdSetResolution(c);
   } else if (cmd == "unsubscribe-slot") {
     error = cmdUnsubscribeSlot(c);
   } else if (cmd == "iso") {
@@ -209,6 +211,7 @@ std::string EdgeController::cmdJoin(const Json& c) {
   rawMediaReason_.clear();
   received_.clear();
   book_.clear();
+  zoomGrant_.clear();
   meetingId_ = join.meetingId;
 
   phase_ = Phase::Starting;
@@ -270,8 +273,22 @@ std::string EdgeController::cmdSubscribe(const Json& c) {
       return "Stop recording before unsubscribing " + s->displayName + " (their ISO is being recorded).";
     }
   }
+  const int slot = static_cast<int>(c.getNumber("slot", 0));
+  const int height = static_cast<int>(c.getNumber("resolution", 1080));
   std::vector<SubscriptionAction> actions;
-  const auto refusal = book_.request({it->id, it->displayName, it->isMe}, on, actions);
+  const auto refusal = book_.request({it->id, it->displayName, it->isMe}, on, actions, "operator", slot, height);
+  applyActions(actions);
+  return refusal;
+}
+
+std::string EdgeController::cmdSetResolution(const Json& c) {
+  const int slot = static_cast<int>(c.getNumber("slot"));
+  // A re-subscribe drops the slot's frames for a moment and re-creates its
+  // engine regions: never under a running ISO (same rule as the ISO selection).
+  if (slotIsRecording(slot)) return "The feed resolution is fixed while this slot's ISO is recording. Stop to change it.";
+  std::vector<SubscriptionAction> actions;
+  const auto refusal = book_.setHeight(slot, static_cast<int>(c.getNumber("resolution", 1080)), actions);
+  zoomGrant_.erase(slotSourceUuid(slot));
   applyActions(actions);
   return refusal;
 }
@@ -361,6 +378,7 @@ void EdgeController::fail(const std::string& message) {
   roster_.clear();
   rosterKnown_ = false;
   book_.clear();
+  zoomGrant_.clear();
   markDirty();
 }
 
@@ -372,7 +390,9 @@ void EdgeController::sendSubscribe(int slot, std::uint32_t participantId) {
   modules::ZoomEngineSubscribeCommand command;
   command.sourceUuid = slotSourceUuid(slot);
   command.participantId = participantId;
-  command.resolution = 2;  // 1080p, always. Count is never bought with resolution.
+  // 1080p unless the operator explicitly chose 720p/360p for this slot.
+  const auto* selection = book_.findBySlot(slot);
+  command.resolution = static_cast<std::uint32_t>(engineResolutionForHeight(selection ? selection->height : 1080));
   (void)engine_.send(modules::buildZoomEngineSubscribeCommand(command));
   command.isolateAudio = true;  // this participant's own audio, before any mix
   (void)engine_.send(modules::buildZoomEngineSubscribeAudioCommand(command));
@@ -382,6 +402,7 @@ void EdgeController::sendUnsubscribe(int slot) {
   sendIsoDemand(slot, 0);
   (void)engine_.send(modules::buildZoomEngineUnsubscribeCommand(slotSourceUuid(slot)));
   received_.erase(slotSourceUuid(slot));
+  zoomGrant_.erase(slotSourceUuid(slot));
 }
 
 void EdgeController::sendIsoDemand(int slot, std::uint32_t epoch) {
@@ -530,6 +551,7 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
       roster_.clear();
       rosterKnown_ = false;
       book_.clear();
+      zoomGrant_.clear();
       received_.clear();
       stopEngine();
       break;
@@ -579,6 +601,31 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
         movingSince_ = Clock::now();
         break;
       }
+      // What the SDK agreed to for a slot's subscription. The engine falls
+      // back 1080p -> 720p -> 360p when subscribe() refuses a tier; without
+      // this the operator could not tell an SDK refusal from Zoom choosing to
+      // send 720p on a granted 1080p subscription.
+      if (e.sourceUuid.rfind("edge-s", 0) == 0 &&
+          (e.stage == "video_subscribe" || e.stage == "video_resolution_downgraded" ||
+           e.stage == "video_subscribe_failed_all")) {
+        core::nativeLogf("[zoom-subscribe] %s %s code=%d resolution=%d requested=%d actual=%d\n", e.sourceUuid.c_str(),
+                         e.stage.c_str(), e.sdkCode.value_or(-1), e.resolution.value_or(-1),
+                         e.requestedResolution.value_or(-1), e.actualResolution.value_or(-1));
+        auto& grant = zoomGrant_[e.sourceUuid];
+        if (e.stage == "video_subscribe") {
+          if (e.sdkCode.value_or(-1) == 0 && e.resolution) {
+            grant.grantedHeight = heightForEngineResolution(*e.resolution);
+            grant.failed = false;
+          } else if (e.sdkCode && e.resolution) {
+            grant.lastRefusedHeight = heightForEngineResolution(*e.resolution);
+            grant.lastRefusedCode = *e.sdkCode;
+          }
+        } else if (e.stage == "video_subscribe_failed_all") {
+          grant.failed = true;
+          grant.grantedHeight = 0;
+        }
+        break;
+      }
       return;
     default:
       return;  // ping: liveness only, no state change
@@ -604,6 +651,7 @@ void EdgeController::tick() {
     phase_ = Phase::Idle;
     roster_.clear();
     book_.clear();
+    zoomGrant_.clear();
     stopEngine();
     markDirty();
   } else if (phase_ == Phase::Leaving && now - phaseSince_ > std::chrono::seconds(10)) {
@@ -749,9 +797,20 @@ Json EdgeController::buildState() const {
 
   Json::Array selections;
   for (const auto& s : book_.selections()) {
-    selections.emplace_back(Json::Object{{"slot", s.slot}, {"participantId", static_cast<double>(s.participantId)},
-                                         {"name", s.displayName}, {"present", s.present}, {"iso", s.iso},
-                                         {"fromConfig", s.fromConfig}});
+    Json::Object row{{"slot", s.slot}, {"participantId", static_cast<double>(s.participantId)},
+                     {"name", s.displayName}, {"present", s.present}, {"iso", s.iso},
+                     {"fromConfig", s.fromConfig}, {"resolution", s.height}};
+    if (const auto g = zoomGrant_.find(slotSourceUuid(s.slot)); g != zoomGrant_.end()) {
+      Json::Object zoom;
+      if (g->second.grantedHeight) zoom.emplace("granted", g->second.grantedHeight);
+      if (g->second.lastRefusedHeight) {
+        zoom.emplace("refused", g->second.lastRefusedHeight);
+        zoom.emplace("refusedCode", g->second.lastRefusedCode);
+      }
+      if (g->second.failed) zoom.emplace("failed", true);
+      row.emplace("zoom", Json(std::move(zoom)));
+    }
+    selections.emplace_back(std::move(row));
   }
   state.emplace("subscriptions", Json(std::move(selections)));
 
