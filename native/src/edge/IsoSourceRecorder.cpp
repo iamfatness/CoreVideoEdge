@@ -3,15 +3,13 @@
 #include "core/BoundedAsyncLog.h"
 #include "edge/IsoAudioTimeline.h"
 #include "edge/FastConform.h"
+#include "edge/ShmReopen.h"
 #include "edge/SteadyClock.h"
 #include "modules/IsoFrameConform.h"
 #include "modules/ZoomEngineClient.h"
 
 #include "engine-ipc.h"
 #include "iso-video-ring.h"
-
-#include <mfapi.h>
-#include <objbase.h>
 
 #include <chrono>
 #include <vector>
@@ -20,20 +18,6 @@ namespace corevideo::edge {
 namespace {
 
 constexpr auto kPoll = std::chrono::milliseconds(5);
-
-
-struct ComMfScope {
-  bool com = false;
-  bool mf = false;
-  ComMfScope() {
-    com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
-    mf = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
-  }
-  ~ComMfScope() {
-    if (mf) MFShutdown();
-    if (com) CoUninitialize();
-  }
-};
 
 std::int64_t msSince(std::int64_t then100ns, std::int64_t now100ns) {
   return then100ns <= 0 ? -1 : (now100ns - then100ns) / 10'000;
@@ -101,12 +85,12 @@ void IsoSourceRecorder::setWarning(const std::string& text) {
 }
 
 void IsoSourceRecorder::run() {
-  ComMfScope scope;
+  IsoMediaThreadScope scope;
   IsoMp4Writer writer;
   std::string error;
-  bool opened = scope.com && scope.mf && writer.open(config_.path, config_.writer, error);
-  if (!scope.com || !scope.mf) error = "Media Foundation is not available on this machine";
-  if (!opened && config_.writer.hardwareEncode && scope.mf) {
+  bool opened = scope.ok() && writer.open(config_.path, config_.writer, error);
+  if (!scope.ok()) error = scope.error();
+  if (!opened && config_.writer.hardwareEncode && scope.ok()) {
     // A GPU with no free encoder session (consumer cards cap them) or no H.264
     // MFT at all: fall back to the software encoder for THIS file, and say so
     // through the measured encoder path rather than pretending.
@@ -143,6 +127,7 @@ void IsoSourceRecorder::run() {
   const auto videoName = config_.shmPrefix + config_.slotUuid + "-iso";
   const auto audioName = config_.shmPrefix + config_.slotUuid + "_audio";
   ShmRegion videoRing, audioRing;
+  ShmWatch videoWatch, audioWatch;  // POSIX: reopen a ring the engine re-created (ShmReopen.h)
   std::uint32_t videoNext = 0;
   std::uint64_t audioNext = 0;
   bool audioSkipBacklog = true;  // a ring that already exists at start holds pre-take audio
@@ -310,12 +295,21 @@ void IsoSourceRecorder::run() {
     // The engine creates a ring on the first frame/packet after it is armed.
     // The video ring holds only 4 frames, so look for it on every poll until
     // it exists (OpenFileMapping on a missing name is a cheap kernel miss).
+    const auto watchNow = shmWatchNowMs();
+    if (videoRing.ptr &&
+        videoWatch.shouldReopen(zoom_iso::load(static_cast<const zoom_iso::Header*>(videoRing.ptr)->written), watchNow))
+      shm_region_destroy(videoRing);  // a re-created ring restarts its counter; drain() rewinds videoNext
+    if (audioRing.ptr &&
+        audioWatch.shouldReopen(static_cast<const volatile ShmAudioRingHeader*>(audioRing.ptr)->write_counter, watchNow))
+      shm_region_destroy(audioRing);
     if (!videoRing.ptr || !audioRing.ptr) {
       if (!videoRing.ptr) shm_region_open_read(videoRing, videoName, zoom_iso::bytes);
       if (!audioRing.ptr && shm_region_open_read(audioRing, audioName, audio_ring_region_size())) {
+        const auto& header = *static_cast<const ShmAudioRingHeader*>(audioRing.ptr);
         if (audioSkipBacklog) {
-          const auto& header = *static_cast<const ShmAudioRingHeader*>(audioRing.ptr);
           audioNext = header.magic == kAudioRingMagic ? header.write_counter : 0;
+        } else if (header.magic == kAudioRingMagic && header.write_counter < audioNext) {
+          audioNext = 0;  // a re-created ring (POSIX reopen): read it from its start
         }
       }
       audioSkipBacklog = false;  // a ring that appears later was born during the take

@@ -1,20 +1,22 @@
 #pragma once
 
 // One ISO file: H.264 video (NV12 input) + AAC stereo audio in a fragmented
-// MP4, written with Media Foundation.
+// MP4. The timing rules live here and are the same on every platform; the
+// encoder/muxer is the platform backend (IsoEncoder.h): Media Foundation on
+// Windows, VideoToolbox + AVAssetWriter on macOS.
 //
 // A focused subset of CoreVideo Pro's Mp4Writer
 // (native/src/modules/MediaFoundationEncoderAdapter.cpp), keeping the rules Pro
 // learned the hard way:
 //  - BT.709 full-range NV12 in and out (Zoom raw I420 is requested that way);
-//  - the AAC stream is added BEFORE BeginWriting (#286: added later it fails and
-//    the ISO silently has no audio track);
-//  - fragmented MP4 (MFCreateFMPEG4MediaSink, 1 s fragments) so a crash or power
-//    loss loses only the in-flight tail;
-//  - Sink Writer throttling OFF (#1030: with it on, a stalled video stream
-//    blocks the next audio WriteSample forever);
+//  - the AAC stream is added BEFORE writing begins (#286: added later it fails
+//    and the ISO silently has no audio track);
+//  - fragmented MP4 (1 s fragments) so a crash or power loss loses only the
+//    in-flight tail;
+//  - no muxer throttling (#1030: with it on, a stalled video stream blocks the
+//    next audio write forever);
 //  - audio PTS are sample-counted (gapless AAC), silence is written explicitly;
-//  - explicit end-of-segment + bounded drain before Finalize;
+//  - explicit end-of-stream + bounded drain before finalize;
 //  - every failure is returned as text, never swallowed.
 //
 // Edge differences:
@@ -33,34 +35,18 @@
 //    for a stalled camera) and writeVideo refuses to queue past a hard
 //    backlog, counting each refused frame as dropped.
 //
-// Single-threaded: all calls from the owning recorder thread, which must have
-// initialized COM (MTA) and MFStartup.
+// Single-threaded: all calls from the owning recorder thread, which must hold
+// an IsoMediaThreadScope (Windows: COM MTA + MFStartup).
+
+#include "edge/IsoEncoder.h"
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <mfidl.h>
-#include <mfreadwrite.h>
-#include <wrl/client.h>
-
 namespace corevideo::edge {
-
-struct IsoWriterSettings {
-  int width = 1920;
-  int height = 1080;
-  int nominalFps = 30;
-  int videoBitrateMbps = 18;   // Pro's ISO default
-  int audioBitrateKbps = 192;
-  int audioSampleRate = 48000;
-  bool hardwareEncode = true;
-  int maxVideoBacklog = 60;    // samples (2 s at 30 fps, ~190 MB at 1080p NV12)
-  int constantFps = 0;         // 0: variable, as Zoom delivers. 30 | 60: every sample on a fixed grid
-};
 
 class IsoMp4Writer {
  public:
@@ -84,7 +70,7 @@ class IsoMp4Writer {
   // pts100ns is not after the held frame.
   bool repeatHeldVideo(std::int64_t pts100ns, std::string& error);
 
-  // Samples written to the Sink Writer that it has not yet passed to the file.
+  // Samples written to the encoder that it has not yet passed to the file.
   [[nodiscard]] std::int64_t videoBacklog() const;
 
   // Interleaved stereo float [-1, 1], appended at the next sample position.
@@ -113,24 +99,19 @@ class IsoMp4Writer {
   [[nodiscard]] std::int64_t bytesOnDisk() const;
 
  private:
-  bool writeVideoSample(IMFSample* sample, std::string& error);
-  bool queueVideoBuffer(IMFMediaBuffer* buffer, std::int64_t pts100ns, bool preroll, std::string& error);
+  using Frame = IsoEncoderBackend::FramePtr;
+  bool queueVideoFrame(Frame frame, std::int64_t pts100ns, bool preroll, std::string& error);
   bool flushPendingVideo(std::int64_t end100ns, std::string& error);
   bool writePcm16(const std::int16_t* samples, std::int64_t frames, std::string& error);
-  void detectEncoderPath();
   void reset();
 
   std::filesystem::path path_;
   IsoWriterSettings settings_;
-  Microsoft::WRL::ComPtr<IMFByteStream> byteStream_;
-  Microsoft::WRL::ComPtr<IMFMediaSink> mediaSink_;
-  Microsoft::WRL::ComPtr<IMFSinkWriter> sinkWriter_;
-  DWORD videoStream_ = 0;
-  DWORD audioStream_ = 1;
+  std::unique_ptr<IsoEncoderBackend> backend_;
   bool writing_ = false;
   std::int64_t frameDuration100ns_ = 333'333;
 
-  Microsoft::WRL::ComPtr<IMFMediaBuffer> pendingBuffer_;
+  Frame pendingFrame_;
   std::int64_t pendingPts100ns_ = -1;
   bool pendingIsPreroll_ = false;
   bool pendingIsRepeat_ = false;

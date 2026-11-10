@@ -5,7 +5,7 @@
 // latest-wins preview region) and that participant's isolated, pre-mix audio
 // (from the per-source audio ring), both on the take's shared epoch.
 //
-// Owns one thread. All Media Foundation work happens on it.
+// Owns one thread. All encoder work (Media Foundation / AVFoundation) happens on it.
 
 #include "edge/IsoMp4Writer.h"
 

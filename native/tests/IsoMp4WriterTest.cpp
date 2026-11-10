@@ -2,9 +2,6 @@
 
 #include "edge/IsoMp4Writer.h"
 
-#include <mfapi.h>
-#include <objbase.h>
-
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -15,23 +12,28 @@ using namespace corevideo::edge;
 
 namespace {
 
-struct MfScope {
-  MfScope() {
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    MFStartup(MF_VERSION, MFSTARTUP_LITE);
-  }
-  ~MfScope() {
-    MFShutdown();
-    CoUninitialize();
-  }
-};
+// Windows: COM + Media Foundation for this thread. macOS: nothing.
+using MfScope = IsoMediaThreadScope;
+
+#if defined(_WIN32)
+FILE* openPipe(const std::string& command, bool binary) { return _popen(command.c_str(), binary ? "rb" : "r"); }
+void closePipe(FILE* pipe) { _pclose(pipe); }
+#else
+FILE* openPipe(const std::string& command, bool) { return popen(command.c_str(), "r"); }
+void closePipe(FILE* pipe) { pclose(pipe); }
+#endif
+
+// The probe tool is missing (Windows cmd / POSIX sh wording).
+bool toolMissing(const std::string& out) {
+  return out.empty() || out.find("not recognized") != std::string::npos || out.find("not found") != std::string::npos;
+}
 
 std::string run(const std::string& command) {
   std::string out;
-  if (FILE* pipe = _popen(command.c_str(), "r")) {
+  if (FILE* pipe = openPipe(command, false)) {
     char buffer[512];
     while (fgets(buffer, sizeof(buffer), pipe)) out += buffer;
-    _pclose(pipe);
+    closePipe(pipe);
   }
   return out;
 }
@@ -78,7 +80,7 @@ TEST(IsoMp4Writer, WritesAPlayableVideoPlusAudioFile) {
 
   const auto probe = run("ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,sample_rate,channels "
                          "-show_entries format=duration -of compact \"" + path.string() + "\" 2>&1");
-  if (probe.empty() || probe.find("not recognized") != std::string::npos) {
+  if (toolMissing(probe)) {
     std::fprintf(stderr, "  (ffprobe not on PATH; container check skipped)\n");
     return;
   }
@@ -94,13 +96,21 @@ TEST(IsoMp4Writer, WritesAPlayableVideoPlusAudioFile) {
   // Both tracks were brought to the 3.0 s take end.
   EXPECT_TRUE(duration > 2.9 && duration < 3.2);
   if (!(duration > 2.9 && duration < 3.2)) std::fprintf(stderr, "  ffprobe: %s\n", probe.c_str());
+  // Informational: what the platform encoder declared (full-range BT.709 is the intent).
+  std::fprintf(stderr, "  encoder=%s %s", writer.encoderPath().c_str(),
+               run("ffprobe -v error -select_streams v -show_entries stream=color_range,color_space,color_primaries,"
+                   "color_transfer,profile -of compact \"" + path.string() + "\" 2>&1").c_str());
 }
 
 TEST(IsoMp4Writer, AnUnwritablePathFailsLoudly) {
   MfScope mf;
   IsoMp4Writer writer;
   std::string error;
+#if defined(_WIN32)
   EXPECT_FALSE(writer.open("Z:\\no\\such\\volume\\x.mp4", IsoWriterSettings{}, error));
+#else
+  EXPECT_FALSE(writer.open("/no/such/volume/x.mp4", IsoWriterSettings{}, error));
+#endif
   EXPECT_FALSE(error.empty());
 }
 
@@ -124,11 +134,11 @@ TEST(IsoMp4Writer, AudioDecodesAtTheSamplePositionItWasWritten) {
   ASSERT_TRUE(writer.writeSilence(48000, error));
   ASSERT_TRUE(writer.finalize(0, error));
   std::string pcm;
-  if (FILE* pipe = _popen(("ffmpeg -v error -i \"" + path.string() + "\" -map 0:a:0 -ac 1 -f s16le -").c_str(), "rb")) {
+  if (FILE* pipe = openPipe("ffmpeg -v error -i \"" + path.string() + "\" -map 0:a:0 -ac 1 -f s16le -", true)) {
     char buffer[65536];
     size_t n;
     while ((n = fread(buffer, 1, sizeof(buffer), pipe)) > 0) pcm.append(buffer, n);
-    _pclose(pipe);
+    closePipe(pipe);
   }
   if (pcm.empty()) {
     std::fprintf(stderr, "  (ffmpeg not on PATH; decode check skipped)\n");
@@ -221,7 +231,7 @@ TEST(IsoMp4Writer, ConstantThirtyFromAnIrregularSourceIsOnTheGrid) {
   // 4 s at 30 fps = 120 samples (+-1 at the edges), all of them on the grid.
   const auto out = run("ffprobe -v error -select_streams v -count_packets -show_entries stream=nb_read_packets,r_frame_rate,avg_frame_rate "
                        "-of compact \"" + path.string() + "\" 2>&1");
-  if (out.find("not recognized") != std::string::npos || out.empty()) return;
+  if (toolMissing(out)) return;
   std::fprintf(stderr, "  ffprobe: %s", out.c_str());
   const auto at = out.find("nb_read_packets=");
   ASSERT_TRUE(at != std::string::npos);
@@ -246,6 +256,6 @@ TEST(IsoMp4Writer, A720pRecordFormatWritesA720pFile) {
   ASSERT_TRUE(writer.writeAudio(tone.data(), 48000, error));
   EXPECT_TRUE(writer.finalize(10'000'000, error));
   const auto out = run("ffprobe -v error -select_streams v -show_entries stream=width,height -of compact \"" + path.string() + "\" 2>&1");
-  if (out.find("not recognized") != std::string::npos || out.empty()) return;
+  if (toolMissing(out)) return;
   EXPECT_TRUE(out.find("width=1280|height=720") != std::string::npos);
 }
