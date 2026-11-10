@@ -10,7 +10,7 @@ public partial class RoutingView : UserControl
 {
     // name column + 8 subscribe cells + 16 gap + 8 x 36 ISO, plus margins.
     private const double BothBandsWidth = NameColumn + 8 * SubscribeCell + 16 + 8 * 36 + 32;
-    private const double NameColumn = 300;    // name + delivered size + Zoom feed picker
+    private const double NameColumn = 340;    // name + Zoom feed + frame rate pickers
     private const double SubscribeCell = 72;
     private const double LeftColumnWidth = 320;
 

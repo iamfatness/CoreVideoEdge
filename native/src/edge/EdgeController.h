@@ -72,6 +72,7 @@ class EdgeController {
   std::string cmdUnsubscribeSlot(const rpc::Json& c);
   std::string cmdIso(const rpc::Json& c);
   std::string cmdSetResolution(const rpc::Json& c);
+  std::string cmdSetFps(const rpc::Json& c);
   std::string cmdRecordStart();
   std::string cmdRecordStop();
   std::string cmdEngine(const rpc::Json& c);
@@ -127,7 +128,6 @@ class EdgeController {
   bool awaitingArrival_ = false;  // left for a move, not yet joined the new room (90 s limit)
   std::chrono::steady_clock::time_point movingSince_{};
   int recordHeight_ = 1080;       // 1080 | 720 (16:9)
-  int recordFps_ = 0;             // 0 = as Zoom delivers (VFR), 30 | 60 = constant
   struct Received { std::uint32_t width = 0, height = 0; std::chrono::steady_clock::time_point at; };
   std::map<std::string, Received> received_;  // by slot source_uuid, from engine frame beacons
   // What the SDK's subscribe() accepted per slot (engine debug lines).

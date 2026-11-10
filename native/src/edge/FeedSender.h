@@ -27,6 +27,7 @@ struct FeedSlotSpec {
   std::string sourceUuid;
   std::uint32_t participantId = 0;
   std::string guestName;
+  int fps = 0;  // SRT pacing: 30 | 60; 0 (as Zoom sends) paces at 30
 };
 
 struct FeedHealth {

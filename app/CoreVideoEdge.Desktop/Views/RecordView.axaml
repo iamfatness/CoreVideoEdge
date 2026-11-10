@@ -39,15 +39,8 @@
                 <Button Classes="segment" Classes.active="{Binding Is720}" Content="720p" Command="{Binding SetHeightCommand}" CommandParameter="720" />
               </StackPanel>
             </Border>
-            <TextBlock Classes="label" Text="Frame rate" Margin="0,8,0,0" />
-            <Border Classes="segtrack" HorizontalAlignment="Left" AutomationProperties.Name="Record frame rate">
-              <StackPanel Orientation="Horizontal" Spacing="2">
-                <Button Classes="segment" Classes.active="{Binding FpsSource}" Content="Source" Command="{Binding SetFpsCommand}" CommandParameter="0"
-                        ToolTip.Tip="As Zoom delivers (variable)" />
-                <Button Classes="segment" Classes.active="{Binding Fps30}" Content="30" Command="{Binding SetFpsCommand}" CommandParameter="30" />
-                <Button Classes="segment" Classes.active="{Binding Fps60}" Content="60" Command="{Binding SetFpsCommand}" CommandParameter="60" />
-              </StackPanel>
-            </Border>
+            <TextBlock Classes="secondary" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
+                       Text="Frame rate is set per guest on Routing (Source, 30 or 60)." />
             <TextBlock Classes="label" Text="{Binding LockedNote}" IsVisible="{Binding Recording}" />
             <TextBlock Classes="error" Text="{Binding FormatError}" IsVisible="{Binding FormatErrorVisible}" TextWrapping="Wrap" />
           </StackPanel>

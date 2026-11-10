@@ -21,7 +21,8 @@
 
 namespace corevideo::edge {
 
-std::unique_ptr<FeedSink> makeSrtFeedSink(const SrtSettings& settings, int slot);
+// fps: the constant rate the feed is paced at (30 or 60).
+std::unique_ptr<FeedSink> makeSrtFeedSink(const SrtSettings& settings, int slot, int fps = 30);
 
 // Locates ffmpeg: COREVIDEO_FFMPEG_DIR, then PATH. Empty when not found.
 std::string findFfmpeg();

@@ -30,6 +30,7 @@ struct IsoSourceRequest {
   std::string slotUuid;
   std::uint32_t participantId = 0;
   std::string displayName;
+  int constantFps = 0;  // this slot's rate (Routing): 0 = as Zoom sends, 30 | 60
 };
 
 struct IsoSessionRequest {

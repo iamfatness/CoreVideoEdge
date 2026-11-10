@@ -275,8 +275,12 @@ async function main() {
       'Engine On: every routed source is received again with no re-routing');
   }
   if (format) {
-    const f = await send('set-record-format', { height: formatHeight, fps: formatFps });
-    check(f.ok, `record format ${formatHeight}p ${formatFps ? formatFps + ' fps constant' : 'as delivered'}${f.ok ? '' : ': ' + f.error}`);
+    const f = await send('set-record-format', { height: formatHeight });
+    check(f.ok, `record format ${formatHeight}p${f.ok ? '' : ': ' + f.error}`);
+    // The frame rate is per routed slot (set-fps), not part of the format.
+    const slots = state.subscriptions.map((s) => s.slot);
+    const rates = await Promise.all(slots.map((slot) => send('set-fps', { slot, fps: formatFps })));
+    check(rates.every((r) => r.ok), `every slot set to ${formatFps ? formatFps + ' fps constant' : 'as delivered'}`);
   }
   if (feeds) await checkFeeds(pickIds);
   const folder = await send('set-record-folder', { path: outDir });

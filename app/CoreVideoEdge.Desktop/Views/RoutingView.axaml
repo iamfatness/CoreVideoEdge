@@ -22,7 +22,7 @@
               <Button Classes="segment" Classes.active="{Binding ShowAll}" Content="{Binding AllLabel}" Command="{Binding ShowAllCommand}" />
             </StackPanel>
           </Border>
-          <Grid Width="240">
+          <Grid Width="180">
             <TextBox Text="{Binding Search}" Watermark="Search participants" Padding="32,8,10,8" AutomationProperties.Name="Search participants" />
             <c:Icon Data="{StaticResource IconSearch}" Foreground="{StaticResource Text2Brush}" Margin="10,0,0,0"
                     HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False" />
@@ -35,6 +35,15 @@
                 <Button Classes="segment" Classes.active="{Binding Feed1080}" Content="1080p" Command="{Binding Feed1080Command}" />
                 <Button Classes="segment" Classes.active="{Binding Feed720}" Content="720p" Command="{Binding Feed720Command}" />
                 <Button Classes="segment" Classes.active="{Binding Feed360}" Content="360p" Command="{Binding Feed360Command}" />
+              </StackPanel>
+            </Border>
+            <TextBlock Classes="label" Text="Rate" VerticalAlignment="Center" Margin="8,0,0,0" />
+            <Border Classes="segtrack" AutomationProperties.Name="Frame rate for new routes"
+                    ToolTip.Tip="The rate new routes record and send to Pro at. Zoom cannot be asked for a rate: Source keeps what the guest sends; 30 or 60 paces the ISO and SRT feed.">
+              <StackPanel Orientation="Horizontal" Spacing="2">
+                <Button Classes="segment" Classes.active="{Binding FpsSource}" Content="Source" Command="{Binding FpsSourceCommand}" />
+                <Button Classes="segment" Classes.active="{Binding Fps30}" Content="30" Command="{Binding Fps30Command}" />
+                <Button Classes="segment" Classes.active="{Binding Fps60}" Content="60" Command="{Binding Fps60Command}" />
               </StackPanel>
             </Border>
           </StackPanel>
@@ -147,7 +156,7 @@
           </ItemsControl>
 
           <!-- sticky header row -->
-          <Grid DockPanel.Dock="Top" Height="44" ColumnDefinitions="300,Auto,16,Auto">
+          <Grid DockPanel.Dock="Top" Height="44" ColumnDefinitions="340,Auto,16,Auto">
             <TextBlock Grid.Column="0" Classes="label" Text="Participant" VerticalAlignment="Bottom" Margin="0,0,0,6" />
             <StackPanel Grid.Column="1" IsVisible="{Binding SubscribeBandVisible}">
               <TextBlock Classes="label" Text="Subscribe" />
@@ -155,14 +164,14 @@
                 <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:SlotHeaderViewModel">
-                    <StackPanel Width="72" ToolTip.Tip="{Binding Occupant}" AutomationProperties.Name="{Binding AccessibleName}">
+                    <StackPanel Width="72" ToolTip.Tip="{Binding Tip}" AutomationProperties.Name="{Binding AccessibleName}">
                       <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center">
                         <TextBlock Classes="mono" Text="{Binding Label}" />
                         <Ellipse Width="6" Height="6" VerticalAlignment="Center" IsVisible="{Binding HasDot}"
                                  Fill="{Binding Tone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
                       </StackPanel>
-                      <TextBlock Classes="mono" FontSize="12" Text="{Binding Raster}" HorizontalAlignment="Center"
-                                 Foreground="{StaticResource Text2Brush}" />
+                      <TextBlock Classes="mono secondary" FontSize="12" Text="{Binding Raster}" HorizontalAlignment="Center"
+                                 Classes.warn="{Binding RasterBelowAsked}" />
                     </StackPanel>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -174,7 +183,7 @@
                 <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:SlotHeaderViewModel">
-                    <StackPanel Width="36" ToolTip.Tip="{Binding Occupant}" AutomationProperties.Name="{Binding AccessibleName}">
+                    <StackPanel Width="36" ToolTip.Tip="{Binding Tip}" AutomationProperties.Name="{Binding AccessibleName}">
                       <TextBlock Classes="mono" Text="{Binding Label}" HorizontalAlignment="Center" />
                       <Ellipse Width="6" Height="6" HorizontalAlignment="Center" Margin="0,4,0,0" IsVisible="{Binding HasDot}"
                                Fill="{Binding Tone, Converter={x:Static c:ToneBrushConverter.Instance}, ConverterParameter=fill}" />
@@ -194,7 +203,7 @@
                     <Border.Styles>
                       <Style Selector="Border.selected"><Setter Property="Background" Value="{StaticResource AccentTintBrush}" /></Style>
                     </Border.Styles>
-                    <Grid ColumnDefinitions="300,Auto,16,Auto" RowDefinitions="Auto,Auto">
+                    <Grid ColumnDefinitions="340,Auto,16,Auto" RowDefinitions="Auto,Auto">
                       <Grid Grid.Column="0" ColumnDefinitions="Auto,*,Auto,Auto" VerticalAlignment="Center" Margin="0,0,8,0"
                             AutomationProperties.Name="{Binding AccessibleName}">
                         <Panel Width="16" Height="16" Margin="4,0,8,0">
@@ -203,15 +212,22 @@
                         </Panel>
                         <TextBlock Grid.Column="1" Text="{Binding DisplayName}" FontWeight="Medium" TextTrimming="CharacterEllipsis"
                                    ToolTip.Tip="{Binding DisplayName}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Classes="mono secondary" Text="{Binding Offered}"
-                                   Classes.warn="{Binding OfferedBelowAsked}" ToolTip.Tip="{Binding OfferedTip}"
-                                   VerticalAlignment="Center" Margin="8,0,0,0" IsVisible="{Binding HasOffered}"
-                                   AutomationProperties.Name="{Binding OfferedTip}" />
-                        <ComboBox Grid.Column="3" Margin="6,0,0,0" Width="84" VerticalAlignment="Center" IsVisible="{Binding HasSlot}"
+                        <!-- delivered size lives once, under the slot header (owner 2026-11-09) -->
+                        <ComboBox Grid.Column="2" Margin="6,0,0,0" Width="80" VerticalAlignment="Center" IsVisible="{Binding HasSlot}" IsEnabled="{Binding !FeedLocked}"
                                   ItemsSource="{x:Static vm:ParticipantRowViewModel.ResolutionOptions}" SelectedItem="{Binding Resolution}"
                                   ToolTip.Tip="The resolution this slot asks Zoom for" AutomationProperties.Name="Zoom feed resolution">
                           <ComboBox.ItemTemplate>
                             <DataTemplate x:DataType="x:Int32"><TextBlock Classes="mono" Text="{Binding StringFormat='{}{0}p'}" /></DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <ComboBox Grid.Column="3" Margin="6,0,0,0" Width="88" VerticalAlignment="Center" IsVisible="{Binding HasSlot}" IsEnabled="{Binding !FeedLocked}"
+                                  ItemsSource="{x:Static vm:ParticipantRowViewModel.FpsOptions}" SelectedItem="{Binding Fps}"
+                                  ToolTip.Tip="The rate this slot records and sends to Pro at (Source = as the guest sends)"
+                                  AutomationProperties.Name="Frame rate">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="x:Int32">
+                              <TextBlock Classes="mono" Text="{Binding Converter={x:Static vm:ParticipantRowViewModel.FpsLabel}}" />
+                            </DataTemplate>
                           </ComboBox.ItemTemplate>
                         </ComboBox>
                       </Grid>

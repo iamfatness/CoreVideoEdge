@@ -138,6 +138,7 @@ std::string IsoSession::start(const IsoSessionRequest& request) {
     config.isoRingEpoch = request_.isoRingEpoch;
 
     config.writer = request_.writer;
+    config.writer.constantFps = source.constantFps;
     auto recorder = std::make_unique<IsoSourceRecorder>();
     std::string error;
     if (!recorder->start(config, error)) {
@@ -224,6 +225,9 @@ void IsoSession::writeManifest(bool final) {
         {"file", std::filesystem::path(h.path).filename().string()},
         {"zoomUserIds", Json(std::move(ids))},
         {"state", h.state},
+        {"frameRate", request_.sources[i].constantFps > 0
+                          ? std::to_string(request_.sources[i].constantFps) + " (constant)"
+                          : std::string("variable (source timing)")},
     };
     if (final) {
       entry.emplace("videoFrames", static_cast<double>(h.videoFrames));
@@ -260,8 +264,7 @@ void IsoSession::writeManifest(bool final) {
           {"codec", "h264"},
           {"width", request_.writer.width},
           {"height", request_.writer.height},
-          {"frameRate", request_.writer.constantFps > 0 ? std::to_string(request_.writer.constantFps) + " (constant)"
-                                                        : std::string("variable (source timing)")},
+          {"frameRate", "per ISO (isos[].frameRate)"},
           {"bitrateMbps", request_.writer.videoBitrateMbps},
           {"range", "bt709-full"},
       }},
