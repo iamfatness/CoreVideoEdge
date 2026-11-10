@@ -490,9 +490,7 @@ class SrtSink final : public FeedSink {
 
   void supervise() {
     bool hardware = true;
-    int attempt = 0;
     while (running_.load()) {
-      ++attempt;
       const auto outcome = runOnce(hardware);
       if (!running_.load()) break;
       if (outcome == Outcome::EncoderMissing && hardware) { hardware = false; continue; }

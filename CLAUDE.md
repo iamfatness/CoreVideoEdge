@@ -100,6 +100,16 @@ file in the same change as any substantive work.
   `POSIX_SPAWN_CLOEXEC_DEFAULT` passes the child only its three ends (the
   handle-inheritance law, POSIX form). The forked engine gets stdout -> stderr
   (stdout is the node's protocol) and no other descriptor.
+- **The macOS CI runner is not a realtime machine.** A 5 ms sleep takes
+  ~22 ms there (median, any QoS; `Platform.FiveMillisecondSleepPrecision`
+  prints it) and the whole VM stalls 100-300 ms a few times a run. The
+  recorder polls at ~30 Hz instead of 200 Hz, the fake's audio pacing lags its
+  clap frame by ~90 ms, six 1080p sources overrun the 4-frame ring now and
+  then and a 60 fps source always does. So CI gates on four 30 fps sources
+  with `--max-skew-ms 120`; the
+  six-source take only reports; the writer's A/V placement is proven exact
+  by a unit test (0.0 ms on both platforms). Do not "fix" CI by weakening a
+  product rule; prove 6-8 sources on a real Mac.
 - **Mac compiles and tests only in CI** (`.github/workflows/macos.yml`). Push
   to `mac-*`, `gh run watch`, `gh run view <id> --log-failed`; the validator log
   is in the `mac-native-diagnostics` artifact on failure. Never put SDK files
