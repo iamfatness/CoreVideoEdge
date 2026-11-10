@@ -30,7 +30,12 @@ const args = Object.fromEntries(
     return pairs;
   }, []),
 );
-const bin = resolve(args.bin ?? join(root, 'build', 'bin'));
+// Windows: build/bin/*.exe (scripts/build.ps1). macOS: build/mac/<name>, no
+// .exe, the real engine inside corevideo-zoom-engine.app (native/CMakeLists.txt).
+const isWindows = process.platform === 'win32';
+const isMac = process.platform === 'darwin';
+const exeName = (name) => (isWindows ? `${name}.exe` : name);
+const bin = resolve(args.bin ?? (isWindows ? join(root, 'build', 'bin') : join(root, 'build', 'mac')));
 const engine = args.engine ?? 'fake';
 const fake = engine === 'fake';
 const wantSources = Number(args.sources ?? (fake ? 4 : 0));
@@ -65,7 +70,10 @@ if (!fake && !meeting) {
   process.exit(2);
 }
 mkdirSync(outDir, { recursive: true });
-const exe = join(bin, 'corevideo-edge.exe');
+const exe = join(bin, exeName('corevideo-edge'));
+const realEngine = isMac
+  ? join(bin, 'corevideo-zoom-engine.app', 'Contents', 'MacOS', 'corevideo-zoom-engine')
+  : join(bin, exeName('corevideo-zoom-engine'));
 if (!existsSync(exe)) {
   console.error(`missing ${exe}; build first (see README)`);
   process.exit(2);
@@ -85,7 +93,7 @@ if (fake) {
     env.COREVIDEO_FAKE_ROOM_MOVE_MS = String(roomStayMs);
   }
 }
-const child = spawn(exe, [fake ? '--fake' : '--engine', ...(fake ? [] : [join(bin, 'corevideo-zoom-engine.exe')]), '--config', configPath], {
+const child = spawn(exe, [fake ? '--fake' : '--engine', ...(fake ? [] : [realEngine]), '--config', configPath], {
   env,
   stdio: ['pipe', 'pipe', 'pipe'],
 });
@@ -404,7 +412,7 @@ async function checkFeeds(pickIds) {
     await waitFor((s) => s.feeds?.slots?.length === routed.length && s.feeds.slots.every((f) => f.state === 'sending'), 15000, 'every feed sending');
     for (const p of routed.slice(0, 2)) {
       const f = state.feeds.slots.find((x) => x.slot === p.slot);
-      const probe = spawnSync(join(bin, 'corevideo-edge-ndi-probe.exe'), ['--name', f.target, '--seconds', '6'], { encoding: 'utf8', timeout: 60000 });
+      const probe = spawnSync(join(bin, exeName('corevideo-edge-ndi-probe')), ['--name', f.target, '--seconds', '6'], { encoding: 'utf8', timeout: 60000 });
       let m = {};
       try { m = JSON.parse(probe.stdout.trim().split(/\r?\n/).pop()); } catch { m = { ok: false, error: probe.stdout + probe.stderr }; }
       check(m.ok && (!fake || (m.width === 1920 && m.height === 1080 && m.fps >= fps * 0.85)) && m.audioRate === 48000 && m.audioChannels === 2 && m.audioSeconds > 4 && m.metadata,
