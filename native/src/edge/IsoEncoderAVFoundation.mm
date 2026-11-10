@@ -89,6 +89,7 @@ class AvIsoEncoder final : public IsoEncoderBackend {
         reset();
         return false;
       }
+      createPool();
       // Probe encode: the black preroll at t=0, synchronously.
       CVPixelBufferRef black = createPixelBuffer(nullptr, error);
       if (!black) {
@@ -400,6 +401,11 @@ class AvIsoEncoder final : public IsoEncoderBackend {
         CFRelease(pcmFormat_);
         pcmFormat_ = nullptr;
       }
+      pendingBlack_.reset();  // its pixel buffer belongs to the pool released next
+      if (pool_) {
+        CVPixelBufferPoolRelease(pool_);
+        pool_ = nullptr;
+      }
       pendingBlack_.reset();
       submitted_ = 0;
       lastVideoTicks_ = -1;
@@ -535,9 +541,44 @@ class AvIsoEncoder final : public IsoEncoderBackend {
     return true;
   }
 
+  // Our own IOSurface NV12 pool, sized for the held frame + the encode queue
+  // + what VT holds, pre-filled at open and never aged out, so no 1080p
+  // IOSurface is created (kernel allocation + zero fill) once the take runs.
+  void createPool() {
+    constexpr int kPrewarm = 12;
+    NSDictionary* poolAttributes = @{
+      (__bridge NSString*)kCVPixelBufferPoolMinimumBufferCountKey : @(kPrewarm),
+      (__bridge NSString*)kCVPixelBufferPoolMaximumBufferAgeKey : @0,
+    };
+    NSDictionary* pixelAttributes = @{
+      (__bridge NSString*)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+      (__bridge NSString*)kCVPixelBufferWidthKey : @(settings_.width),
+      (__bridge NSString*)kCVPixelBufferHeightKey : @(settings_.height),
+      (__bridge NSString*)kCVPixelBufferIOSurfacePropertiesKey : @{},
+    };
+    if (CVPixelBufferPoolCreate(kCFAllocatorDefault, (__bridge CFDictionaryRef)poolAttributes,
+                                (__bridge CFDictionaryRef)pixelAttributes, &pool_) != kCVReturnSuccess) {
+      pool_ = nullptr;  // createPixelBuffer falls back to a plain allocation
+      return;
+    }
+    CVPixelBufferRef warm[kPrewarm] = {};
+    for (auto& p : warm) {
+      if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool_, &p) != kCVReturnSuccess) p = nullptr;
+      if (p) {  // touch every page now, not on the first frame of the take
+        CVPixelBufferLockBaseAddress(p, 0);
+        for (size_t plane = 0; plane < 2; ++plane)
+          std::memset(CVPixelBufferGetBaseAddressOfPlane(p, plane), 0,
+                      CVPixelBufferGetBytesPerRowOfPlane(p, plane) * CVPixelBufferGetHeightOfPlane(p, plane));
+        CVPixelBufferUnlockBaseAddress(p, 0);
+      }
+    }
+    for (auto& p : warm)
+      if (p) CVPixelBufferRelease(p);
+  }
+
   CVPixelBufferRef createPixelBuffer(const std::uint8_t* nv12, std::string& error) {
     CVPixelBufferRef pixels = nullptr;
-    CVPixelBufferPoolRef pool = session_ ? VTCompressionSessionGetPixelBufferPool(session_) : nullptr;
+    CVPixelBufferPoolRef pool = pool_;
     CVReturn result = pool ? CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixels)
                            : CVPixelBufferCreate(kCFAllocatorDefault, settings_.width, settings_.height,
                                                  kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, nullptr, &pixels);
@@ -609,6 +650,7 @@ class AvIsoEncoder final : public IsoEncoderBackend {
 
   IsoWriterSettings settings_;
   VTCompressionSessionRef session_ = nullptr;
+  CVPixelBufferPoolRef pool_ = nullptr;
   AVAssetWriter* writer_ = nil;
   AVAssetWriterInput* videoInput_ = nil;
   AVAssetWriterInput* audioInput_ = nil;
