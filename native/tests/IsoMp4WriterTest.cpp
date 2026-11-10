@@ -272,9 +272,11 @@ TEST(IsoMp4Writer, A720pRecordFormatWritesA720pFile) {
 }
 
 // The validator finds the fake's A/V clap as one full-white frame (decoded
-// luma average > 235). Whatever the platform encoder does to a single white
-// frame between grey ones decides whether that check can pass.
-TEST(IsoMp4Writer, ASingleWhiteFrameDecodesWhite) {
+// luma average > 225, flat) plus an audio burst at the same instant. This is
+// that clap, written straight into the writer: the white frame must decode
+// white, and the frame and the burst must decode at the same time. Anything
+// else is an offset the platform backend adds (priming, edit lists, rounding).
+TEST(IsoMp4Writer, AWhiteFrameAndABurstAtTheSameInstantDecodeTogether) {
   MfScope mf;
   const auto path = testDir() / "writer-white.mp4";
   IsoMp4Writer writer;
@@ -283,17 +285,46 @@ TEST(IsoMp4Writer, ASingleWhiteFrameDecodesWhite) {
   ASSERT_TRUE(writer.open(path, settings, error));
   std::vector<std::uint8_t> grey(1920 * 1080 * 3 / 2, 128), white(1920 * 1080 * 3 / 2, 128);
   std::fill(white.begin(), white.begin() + 1920 * 1080, std::uint8_t{255});
+  const std::int64_t whitePts = 333'333LL * 31;  // frame i=30 below
   for (int i = 0; i < 60; ++i)
     ASSERT_TRUE(writer.writeVideo((i == 30 ? white : grey).data(), 333'333LL * (i + 1), error));
-  std::vector<float> tone(48000 * 2 * 2, 0.0f);
-  ASSERT_TRUE(writer.writeAudio(tone.data(), 48000 * 2, error));
+  std::vector<float> audio(48000 * 2 * 2, 0.0f);
+  const auto burstAt = static_cast<size_t>(whitePts * 48000 / 10'000'000);
+  for (size_t i = 0; i < 96; ++i) audio[(burstAt + i) * 2] = audio[(burstAt + i) * 2 + 1] = ((i / 12) & 1) ? -0.97f : 0.97f;
+  ASSERT_TRUE(writer.writeAudio(audio.data(), 48000 * 2, error));
   ASSERT_TRUE(writer.finalize(21'000'000, error));
   const auto out = run("ffmpeg -v error -i \"" + path.string() +
                        "\" -an -vf scale=192:108,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=- -f null - 2>&1");
   if (toolMissing(out)) return;
-  double peak = 0;
-  for (size_t at = out.find("YAVG="); at != std::string::npos; at = out.find("YAVG=", at + 5))
-    peak = std::max(peak, std::atof(out.c_str() + at + 5));
-  std::fprintf(stderr, "  encoder=%s brightest decoded frame YAVG=%.1f\n", writer.encoderPath().c_str(), peak);
+  double peak = 0, peakTime = -1, frameTime = -1;
+  for (size_t at = 0; at < out.size();) {
+    const auto eol = out.find('\n', at);
+    const auto line = out.substr(at, eol == std::string::npos ? std::string::npos : eol - at);
+    if (const auto t = line.find("pts_time:"); t != std::string::npos) frameTime = std::atof(line.c_str() + t + 9);
+    if (const auto y = line.find("YAVG="); y != std::string::npos) {
+      const double value = std::atof(line.c_str() + y + 5);
+      if (value > peak) { peak = value; peakTime = frameTime; }
+    }
+    if (eol == std::string::npos) break;
+    at = eol + 1;
+  }
+  std::string pcm;
+  if (FILE* pipe = openPipe("ffmpeg -v error -i \"" + path.string() + "\" -map 0:a:0 -ac 1 -f s16le -", true)) {
+    char buffer[65536];
+    size_t n;
+    while ((n = fread(buffer, 1, sizeof(buffer), pipe)) > 0) pcm.append(buffer, n);
+    closePipe(pipe);
+  }
+  const auto* x = reinterpret_cast<const std::int16_t*>(pcm.data());
+  long long burst = -1;
+  for (size_t i = 0; i < pcm.size() / 2; ++i) {
+    if (x[i] > 16000 || x[i] < -16000) { burst = static_cast<long long>(i); break; }
+  }
+  const double burstTime = burst / 48000.0;
+  std::fprintf(stderr, "  encoder=%s white YAVG=%.1f at %.4f s, burst at %.4f s, written at %.4f s (A-V %.1f ms)\n",
+               writer.encoderPath().c_str(), peak, peakTime, burstTime, whitePts / 1e7, (burstTime - peakTime) * 1000);
   EXPECT_TRUE(peak > 235);
+  EXPECT_TRUE(burst >= 0);
+  EXPECT_TRUE(std::abs(peakTime - whitePts / 1e7) < 0.005);   // video where it was written
+  EXPECT_TRUE(std::abs(burstTime - whitePts / 1e7) < 0.002);  // audio where it was written
 }
