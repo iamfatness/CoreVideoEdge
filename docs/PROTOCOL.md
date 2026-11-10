@@ -36,6 +36,7 @@ Every command may carry an `"id"`; the reply echoes it:
 | `set-record-format` | `height` (1080 or 720) | 16:9 at that height. Not while recording. The frame rate is per slot (`set-fps`); a non-zero `fps` here is refused. Constant 30/60 snaps every frame to the grid; repeats and skips are counted. |
 | `comms-key` | `slot` (0..15) + `on`, or `all:true` + `on` (ALL CALL); optional `leaseMs` (0..60000) | Talkback: hold a channel's talk key. With `leaseMs` the hold drops by itself unless re-sent within that time (re-send while held). See [Comms](#comms-zoom-talkback). |
 | `comms-release-all` | | Every held key and ALL CALL up; latches stay. Never refused. Also sent by the node itself before it quits. |
+| `comms-private` | `on` (bool) | Mic mode shared with CoreVideo Pro ("Private comms"). Edge always joins capture-only, so it is always private: accepted, changes nothing, state reports `private: true`. Turning it off is never refused. |
 | `comms-latch` | same two shapes as `comms-key` | Latch a channel (or every channel) keyed. |
 | `comms-assign` | `slot` (0..15), `participantId`, `on` | Put a person on / take them off a talkback channel. |
 | `comms-mic` | `device` (name; `""` = system default) | The station microphone. |
