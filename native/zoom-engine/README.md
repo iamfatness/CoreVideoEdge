@@ -97,6 +97,12 @@ Copied into CoreVideo Edge from `iamfatness/CoreVideoPro` main @ `8751b8d2`
 (`native/zoom-engine/`). The macOS engine (`main-macos.mm`) was not copied:
 Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt`.
 
+**Comms files are shared with CoreVideo Pro byte-for-byte** (Pro branch
+`codex/comms-talkback`, ported from Edge `28c06bc`): `engine/engine-comms.{h,cpp}`,
+`engine/comms/**`, `fake/fake-comms.{h,cpp}`, `third_party/miniaudio/miniaudio.h`.
+Fix them in one repo and copy to the other. `main.cpp` / `fake/fake-engine.cpp`
+differ between the apps; only the Comms hooks (delta 7) must match.
+
 ### Edge deltas (keep this list exact when re-syncing from Pro)
 
 1. **Capture-only join** (`engine/main.cpp`). The `join` command accepts
