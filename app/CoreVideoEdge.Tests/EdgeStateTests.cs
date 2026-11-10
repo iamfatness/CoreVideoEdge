@@ -78,6 +78,31 @@ public sealed class EdgeStateTests
         Assert.Equal("Alice", doc.RootElement.GetProperty("subscribe")[0].GetString());
     }
 
+    [Theory]
+    [InlineData("""{"maxSubscriptions":6,"recordFolder":"D:\\Test"}""", 8)]                 // v1 default: lifted
+    [InlineData("""{"maxSubscriptions":4}""", 4)]                                            // operator's value: kept
+    [InlineData("""{"configVersion":2,"maxSubscriptions":6}""", 6)]                          // chosen after migration: kept
+    public void V1DefaultCapOfSixIsMigratedOnce(string json, int expected)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "corevideo-edge-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "edge.json");
+        File.WriteAllText(path, json);
+        EdgeSettings.EnsureExists(path);
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(expected, doc.RootElement.GetProperty("maxSubscriptions").GetInt32());
+        Assert.Equal(2, doc.RootElement.GetProperty("configVersion").GetInt32());
+    }
+
+    [Fact]
+    public void ANewConfigStartsAtTheCapOfEight()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "corevideo-edge-tests", Guid.NewGuid().ToString("N"), "edge.json");
+        EdgeSettings.EnsureExists(path);
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(8, doc.RootElement.GetProperty("maxSubscriptions").GetInt32());
+    }
+
     [Fact]
     public void SettingsUpdateRefusesToOverwriteBrokenJson()
     {

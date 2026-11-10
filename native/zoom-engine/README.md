@@ -127,6 +127,17 @@ Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt
    send every subscribed guest a continuous tone, which hid the defect that
    took down the first live take (2026-11-09). Default 0 = unchanged.
 
+4. **Scripted breakout move** (`fake/fake-engine.cpp`).
+   `COREVIDEO_FAKE_ROOM_MOVE_AT_MS=T` moves the fake into a breakout room T ms
+   after the first join and back after `COREVIDEO_FAKE_ROOM_MOVE_MS` (default
+   4000), reporting the SDK's meeting_status sequence. Default off.
+
+5. **Subscribe outcome lines** (`fake/fake-engine.cpp`). Each video `subscribe`
+   emits `{"cmd":"debug","stage":"video_subscribe",...,"code":0,"resolution":N}`
+   like the real engine. `COREVIDEO_FAKE_REFUSE_1080=1` makes a 1080p subscribe
+   fail (code 12), succeed at 720p and emit `video_resolution_downgraded`, the
+   real engine's fallback. Default: always granted as asked.
+
 Otherwise the fake engine is unmodified. Edge launches it with
 `COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE=0` so it never streams a participant Edge
 did not explicitly subscribe.

@@ -121,3 +121,53 @@ TEST(SubscriptionPolicy, IsoDefaultsOnAndCanBeToggled) {
   EXPECT_FALSE(book.findBySlot(1)->iso);
   EXPECT_FALSE(book.setIso(7, true).empty());
 }
+
+// Routing (owner 2026-11-09): the operator picks the crosspoint, so a route
+// may name its slot; a taken or out-of-cap slot is refused, never re-placed.
+TEST(SubscriptionPolicy, ARouteMayNameItsSlot) {
+  SubscriptionBook book;
+  const auto people = roster(3);
+  std::vector<SubscriptionAction> actions;
+  EXPECT_EQ(book.request(people[0], true, actions, "operator", 5), std::string());
+  if (actions.size() != size_t{1}) { EXPECT_EQ(actions.size(), size_t{1}); return; }
+  EXPECT_EQ(actions[0].slot, 5);
+  EXPECT_FALSE(book.request(people[1], true, actions, "operator", 5).empty());  // taken
+  EXPECT_FALSE(book.request(people[1], true, actions, "operator", 9).empty());  // past the cap
+  EXPECT_EQ(book.request(people[1], true, actions, "operator"), std::string());
+  EXPECT_EQ(book.findByParticipant(people[1].id)->slot, 1);  // unnamed: lowest free
+}
+
+// Feed resolution is the operator's explicit choice per slot (1080p default).
+TEST(SubscriptionPolicy, FeedResolutionDefaultsTo1080AndIsPerSlot) {
+  SubscriptionBook book;
+  const auto people = roster(2);
+  std::vector<SubscriptionAction> actions;
+  EXPECT_EQ(book.request(people[0], true, actions), std::string());
+  EXPECT_EQ(book.findBySlot(1)->height, 1080);
+  EXPECT_EQ(book.request(people[1], true, actions, "operator", 0, 720), std::string());
+  EXPECT_EQ(book.findBySlot(2)->height, 720);
+  EXPECT_FALSE(book.request(roster(1, 900)[0], true, actions, "operator", 0, 480).empty());
+}
+
+// Changing a routed slot's resolution re-subscribes that slot only (an
+// unsubscribe then a subscribe: the engine and the fake both honour a fresh
+// subscription's resolution, not every in-place change).
+TEST(SubscriptionPolicy, ChangingResolutionResubscribesThatSlot) {
+  SubscriptionBook book;
+  const auto people = roster(2);
+  std::vector<SubscriptionAction> actions;
+  book.request(people[0], true, actions);
+  book.request(people[1], true, actions);
+  actions.clear();
+  EXPECT_EQ(book.setHeight(2, 720, actions), std::string());
+  if (actions.size() != size_t{2}) { EXPECT_EQ(actions.size(), size_t{2}); return; }
+  EXPECT_TRUE(actions[0].kind == SubscriptionAction::Kind::Unsubscribe);
+  EXPECT_TRUE(actions[1].kind == SubscriptionAction::Kind::Subscribe);
+  EXPECT_EQ(actions[1].slot, 2);
+  EXPECT_EQ(book.findBySlot(2)->height, 720);
+  actions.clear();
+  EXPECT_EQ(book.setHeight(2, 720, actions), std::string());  // unchanged: nothing sent
+  EXPECT_TRUE(actions.empty());
+  EXPECT_FALSE(book.setHeight(7, 720, actions).empty());     // no such slot
+  EXPECT_FALSE(book.setHeight(1, 540, actions).empty());     // not a Zoom tier
+}

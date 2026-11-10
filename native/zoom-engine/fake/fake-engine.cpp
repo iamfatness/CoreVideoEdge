@@ -43,6 +43,7 @@
 //   COREVIDEO_FAKE_SILENT_PARTICIPANTS   N: the first N roster participants send no audio (Edge delta 3)
 //   COREVIDEO_FAKE_ROOM_MOVE_AT_MS       T: scripted breakout move T ms after join (Edge delta 4)
 //   COREVIDEO_FAKE_ROOM_MOVE_MS          time spent in the breakout room (default 4000)
+//   COREVIDEO_FAKE_REFUSE_1080           "1": refuse 1080p subscribes, fall back to 720p (Edge delta 5)
 //
 // Windows-focused; a minimal POSIX fallback keeps the file portable so the
 // CMake target stays green on the Linux stub build.
@@ -1069,6 +1070,26 @@ int main(int argc, char** argv) {
             uint32_t res = json_uint(line, "resolution");
             if (res > 2) res = 1;
             const std::string mode = json_str(line, "mode");
+            // Edge delta 5: report subscribe() like the real engine
+            // (engine-video.cpp), including its 1080p -> 720p fallback when
+            // COREVIDEO_FAKE_REFUSE_1080=1 (code 12 stands in for the SDK's).
+            if (!uuid.empty() && pid != 0) {
+                const char* refuse = std::getenv("COREVIDEO_FAKE_REFUSE_1080");
+                if (res == 2 && refuse && refuse[0] == '1') {
+                    EngineIpc::write(R"({"cmd":"debug","stage":"video_subscribe","source_uuid":")" + json_escape(uuid) +
+                                     R"(","participant_id":)" + std::to_string(pid) + R"(,"code":12,"resolution":2})");
+                    res = 1;
+                    EngineIpc::write(R"({"cmd":"debug","stage":"video_subscribe","source_uuid":")" + json_escape(uuid) +
+                                     R"(","participant_id":)" + std::to_string(pid) + R"(,"code":0,"resolution":1})");
+                    EngineIpc::write(R"({"cmd":"debug","stage":"video_resolution_downgraded","source_uuid":")" +
+                                     json_escape(uuid) + R"(","participant_id":)" + std::to_string(pid) +
+                                     R"(,"requested":2,"actual":1})");
+                } else {
+                    EngineIpc::write(R"({"cmd":"debug","stage":"video_subscribe","source_uuid":")" + json_escape(uuid) +
+                                     R"(","participant_id":)" + std::to_string(pid) + R"(,"code":0,"resolution":)" +
+                                     std::to_string(res) + "}");
+                }
+            }
             if (!uuid.empty() && pid != 0) {
                 std::lock_guard<std::mutex> lk(g_mtx);
                 auto it = g_targets.find(uuid);

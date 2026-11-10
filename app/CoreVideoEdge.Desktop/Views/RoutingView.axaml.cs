@@ -8,8 +8,10 @@ namespace CoreVideoEdge.Desktop.Views;
 
 public partial class RoutingView : UserControl
 {
-    // 240 name column + 8 x 80 subscribe + 16 gap + 8 x 36 ISO, plus margins.
-    private const double BothBandsWidth = 240 + 8 * 80 + 16 + 8 * 36 + 32;
+    // name column + 8 subscribe cells + 16 gap + 8 x 36 ISO, plus margins.
+    private const double BothBandsWidth = NameColumn + 8 * SubscribeCell + 16 + 8 * 36 + 32;
+    private const double NameColumn = 300;    // name + delivered size + Zoom feed picker
+    private const double SubscribeCell = 72;
     private const double LeftColumnWidth = 320;
 
     public RoutingView()
@@ -34,8 +36,7 @@ public partial class RoutingView : UserControl
     private void UpdateLayoutMode(double width)
     {
         if (width <= 0) return;
-        // 240 name column + 8 x 80 subscribe cells: the narrowest matrix (one band).
-        const double oneBand = 240 + 8 * 80 + 32;
+        const double oneBand = NameColumn + 8 * SubscribeCell + 32;  // the narrowest matrix (one band)
         var showLeft = width >= LeftColumnWidth + oneBand;
         LeftColumn.IsVisible = showLeft;
         TopFeeds.IsVisible = !showLeft && Vm?.Feeds.Visible == true;

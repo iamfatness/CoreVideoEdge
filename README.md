@@ -190,10 +190,13 @@ free and the REC tally; failures sit in a banner under it until they clear.
    the host for record permission). It shows Requesting until the engine
    reports raw media active. Tokens also work: `COREVIDEO_ZOOM_ON_BEHALF_TOKEN`,
    `COREVIDEO_ZOOM_USER_ZAK`, `COREVIDEO_ZOOM_APP_PRIVILEGE_TOKEN`.
-4. **Routing.** A crosspoint grid: click a Subscribe cell to route a guest (the
-   node assigns the next free slot, up to the cap), the ISO band arms that
-   slot's ISO. Cells stay pending until the node confirms; refusals appear on
-   the row. **Send to Pro** sends every routed slot to CoreVideo Pro over NDI or
+4. **Routing.** A crosspoint grid with every cell drawn: click a free Subscribe
+   cell to route a guest to that slot (up to the cap of 8), the ISO band arms
+   that slot's ISO. **Zoom feed** (1080p / 720p / 360p) in the toolbar sets
+   what new routes ask Zoom for; each routed row has its own picker and shows
+   the size Zoom actually delivers (amber when below the request, with a
+   plain note when the SDK refused a tier). Cells stay pending until the node
+   confirms; refusals appear on the row. **Send to Pro** sends every routed slot to CoreVideo Pro over NDI or
    SRT (see `docs/PROTOCOL.md` `set-feeds`).
 5. **Monitor.** One tile per routed slot from the node's preview files
    (`docs/PROTOCOL.md` "Preview frames"): picture, measured fps and size,

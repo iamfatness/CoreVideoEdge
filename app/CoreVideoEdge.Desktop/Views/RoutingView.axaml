@@ -27,6 +27,17 @@
             <c:Icon Data="{StaticResource IconSearch}" Foreground="{StaticResource Text2Brush}" Margin="10,0,0,0"
                     HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False" />
           </Grid>
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <TextBlock Classes="label" Text="Zoom feed" VerticalAlignment="Center" />
+            <Border Classes="segtrack" AutomationProperties.Name="Zoom feed resolution for new routes"
+                    ToolTip.Tip="The resolution new routes ask Zoom for. Change a routed guest's feed on their row.">
+              <StackPanel Orientation="Horizontal" Spacing="2">
+                <Button Classes="segment" Classes.active="{Binding Feed1080}" Content="1080p" Command="{Binding Feed1080Command}" />
+                <Button Classes="segment" Classes.active="{Binding Feed720}" Content="720p" Command="{Binding Feed720Command}" />
+                <Button Classes="segment" Classes.active="{Binding Feed360}" Content="360p" Command="{Binding Feed360Command}" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
           <Border Classes="segtrack" IsVisible="{Binding Narrow}" AutomationProperties.Name="Band">
             <StackPanel Orientation="Horizontal" Spacing="2">
               <Button Classes="segment" Classes.active="{Binding ShowSubscribeBand}" Content="Subscribe" Command="{Binding ShowSubscribeBandCommand}" />
@@ -136,7 +147,7 @@
           </ItemsControl>
 
           <!-- sticky header row -->
-          <Grid DockPanel.Dock="Top" Height="44" ColumnDefinitions="240,Auto,16,Auto">
+          <Grid DockPanel.Dock="Top" Height="44" ColumnDefinitions="300,Auto,16,Auto">
             <TextBlock Grid.Column="0" Classes="label" Text="Participant" VerticalAlignment="Bottom" Margin="0,0,0,6" />
             <StackPanel Grid.Column="1" IsVisible="{Binding SubscribeBandVisible}">
               <TextBlock Classes="label" Text="Subscribe" />
@@ -144,7 +155,7 @@
                 <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:SlotHeaderViewModel">
-                    <StackPanel Width="80" ToolTip.Tip="{Binding Occupant}" AutomationProperties.Name="{Binding AccessibleName}">
+                    <StackPanel Width="72" ToolTip.Tip="{Binding Occupant}" AutomationProperties.Name="{Binding AccessibleName}">
                       <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center">
                         <TextBlock Classes="mono" Text="{Binding Label}" />
                         <Ellipse Width="6" Height="6" VerticalAlignment="Center" IsVisible="{Binding HasDot}"
@@ -183,8 +194,8 @@
                     <Border.Styles>
                       <Style Selector="Border.selected"><Setter Property="Background" Value="{StaticResource AccentTintBrush}" /></Style>
                     </Border.Styles>
-                    <Grid ColumnDefinitions="240,Auto,16,Auto" RowDefinitions="Auto,Auto">
-                      <Grid Grid.Column="0" ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center" Margin="0,0,8,0"
+                    <Grid ColumnDefinitions="300,Auto,16,Auto" RowDefinitions="Auto,Auto">
+                      <Grid Grid.Column="0" ColumnDefinitions="Auto,*,Auto,Auto" VerticalAlignment="Center" Margin="0,0,8,0"
                             AutomationProperties.Name="{Binding AccessibleName}">
                         <Panel Width="16" Height="16" Margin="4,0,8,0">
                           <c:Icon Data="{StaticResource IconVideo}" Foreground="{StaticResource Text2Brush}" IsVisible="{Binding VideoOn}" />
@@ -192,15 +203,24 @@
                         </Panel>
                         <TextBlock Grid.Column="1" Text="{Binding DisplayName}" FontWeight="Medium" TextTrimming="CharacterEllipsis"
                                    ToolTip.Tip="{Binding DisplayName}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Classes="mono" Text="{Binding Offered}" Foreground="{StaticResource Text2Brush}"
-                                   VerticalAlignment="Center" Margin="8,0,0,0" IsVisible="{Binding HasOffered}" />
+                        <TextBlock Grid.Column="2" Classes="mono secondary" Text="{Binding Offered}"
+                                   Classes.warn="{Binding OfferedBelowAsked}" ToolTip.Tip="{Binding OfferedTip}"
+                                   VerticalAlignment="Center" Margin="8,0,0,0" IsVisible="{Binding HasOffered}"
+                                   AutomationProperties.Name="{Binding OfferedTip}" />
+                        <ComboBox Grid.Column="3" Margin="6,0,0,0" Width="84" VerticalAlignment="Center" IsVisible="{Binding HasSlot}"
+                                  ItemsSource="{x:Static vm:ParticipantRowViewModel.ResolutionOptions}" SelectedItem="{Binding Resolution}"
+                                  ToolTip.Tip="The resolution this slot asks Zoom for" AutomationProperties.Name="Zoom feed resolution">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="x:Int32"><TextBlock Classes="mono" Text="{Binding StringFormat='{}{0}p'}" /></DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
                       </Grid>
                       <ItemsControl Grid.Column="1" ItemsSource="{Binding SubscribeCells}"
                                     IsVisible="{Binding $parent[UserControl].((vm:RoutingViewModel)DataContext).SubscribeBandVisible}">
                         <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                           <DataTemplate x:DataType="vm:CellViewModel">
-                            <Panel Width="80" Height="32">
+                            <Panel Width="72" Height="32">
                               <Button Classes="cell" Classes.routed="{Binding IsRouted}" Classes.pending="{Binding IsPending}"
                                       Classes.failed="{Binding IsFailed}" IsVisible="{Binding IsVisible}"
                                       IsEnabled="{Binding IsInteractive}" Command="{Binding ToggleCommand}"

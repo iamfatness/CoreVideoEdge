@@ -345,9 +345,15 @@
   <Style Selector="Button.cell.failed">
     <Setter Property="BorderBrush" Value="{StaticResource ErrorTextBrush}" />
   </Style>
+  <!-- Unavailable crosspoints stay drawn (owner 2026-11-09) but recede to the
+       hairline so a live (routable) cell is unmistakable. -->
   <Style Selector="Button.cell:disabled">
-    <Setter Property="BorderBrush" Value="{StaticResource TextDisabledBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource HairlineBrush}" />
     <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.cell.routed:disabled">
+    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
   </Style>
   <Style Selector="Button.cell.pending:disabled">
     <Setter Property="BorderBrush" Value="Transparent" />

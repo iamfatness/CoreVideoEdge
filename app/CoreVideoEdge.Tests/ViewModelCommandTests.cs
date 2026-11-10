@@ -123,22 +123,86 @@ public sealed class ViewModelCommandTests
     }
 
     [Fact]
-    public async Task SubscribeCellSendsSubscribeAndStaysPendingUntilConfirmed()
+    public async Task SubscribeCellRoutesToThatSlotAndStaysPendingUntilConfirmed()
     {
         var (vm, node, _) = Make(InMeeting);
         var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
-        var cell = bo.SubscribeCells[4];                       // any free cell
+        var cell = bo.SubscribeCells[4];                       // the operator picks S5
         await vm.Routing.ToggleAsync(cell);
-        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true}""", node.Sent.Single());
-        // The node assigns the lowest free slot (S2): the pending mark sits there, never "routed" yet.
-        Assert.Equal(CellState.Pending, bo.SubscribeCells[1].State);
+        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true,"slot":5,"resolution":1080}""", node.Sent.Single());
+        // The pending mark sits on the crosspoint that was picked, never "routed" yet.
+        Assert.Equal(CellState.Pending, bo.SubscribeCells[4].State);
         Assert.DoesNotContain(bo.SubscribeCells, c => c.State == CellState.Routed);
 
         vm.Apply(EdgeState.Parse(InMeeting
-            .Replace("{\"id\":102,\"name\":\"Bo\",\"videoOn\":true}", "{\"id\":102,\"name\":\"Bo\",\"videoOn\":true,\"slot\":2,\"iso\":false}")
-            .Replace("\"subscriptions\":[", "\"subscriptions\":[{\"slot\":2,\"participantId\":102,\"name\":\"Bo\",\"present\":true,\"iso\":false,\"fromConfig\":false},")));
-        Assert.Equal(CellState.Routed, bo.SubscribeCells[1].State);
-        Assert.Equal(CellState.Hidden, bo.SubscribeCells[4].State);
+            .Replace("{\"id\":102,\"name\":\"Bo\",\"videoOn\":true}", "{\"id\":102,\"name\":\"Bo\",\"videoOn\":true,\"slot\":5,\"iso\":false}")
+            .Replace("\"subscriptions\":[", "\"subscriptions\":[{\"slot\":5,\"participantId\":102,\"name\":\"Bo\",\"present\":true,\"iso\":false,\"fromConfig\":false},")));
+        Assert.Equal(CellState.Routed, bo.SubscribeCells[4].State);
+        // The other crosspoints stay drawn (owner 2026-11-09): never hidden.
+        Assert.DoesNotContain(bo.SubscribeCells, c => c.State == CellState.Hidden);
+        Assert.Equal(CellState.Unavailable, bo.SubscribeCells[1].State);
+    }
+
+    [Fact]
+    public void NoCrosspointIsEverHidden()
+    {
+        var (vm, _, _) = Make(InMeeting);
+        foreach (var row in vm.Routing.Rows)
+        {
+            Assert.Equal(8, row.SubscribeCells.Count);
+            Assert.DoesNotContain(row.SubscribeCells.Concat(row.IsoCells), c => !c.IsVisible);
+        }
+        var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
+        Assert.Equal(CellState.Unavailable, bo.SubscribeCells[0].State);   // S1 carries Ann
+        Assert.Contains("Ann", bo.SubscribeCells[0].Tip);
+        Assert.Equal(CellState.Empty, bo.SubscribeCells[7].State);
+    }
+
+    [Fact]
+    public async Task FeedResolutionDefaultGoesWithNewRoutes()
+    {
+        var (vm, node, _) = Make(InMeeting);
+        vm.Routing.DefaultResolution = 720;
+        var bo = vm.Routing.Rows.Single(r => r.Name == "Bo");
+        await vm.Routing.ToggleAsync(bo.SubscribeCells[1]);
+        Assert.Equal("""{"cmd":"subscribe","participantId":102,"on":true,"slot":2,"resolution":720}""", node.Sent.Single());
+    }
+
+    [Fact]
+    public async Task ChangingARoutedSlotsResolutionSendsSetResolution()
+    {
+        var (vm, node, _) = Make(InMeeting);
+        var ann = vm.Routing.Rows.Single(r => r.Name == "Ann");
+        Assert.Equal(1080, ann.Resolution);
+        ann.Resolution = 720;
+        await vm.Routing.LastResolutionSend!;
+        Assert.Equal("""{"cmd":"set-resolution","slot":1,"resolution":720}""", node.Sent.Single());
+        // A state line echoing the node's value never sends again.
+        vm.Apply(EdgeState.Parse(InMeeting.Replace("\"fromConfig\":false}]", "\"fromConfig\":false,\"resolution\":720}]")));
+        Assert.Equal(720, ann.Resolution);
+        Assert.Single(node.Sent);
+    }
+
+    [Fact]
+    public void DeliveredBelowRequestedIsSaidPlainly()
+    {
+        var (vm, _, _) = Make(InMeeting
+            .Replace("\"received\":{\"width\":1920,\"height\":1080", "\"received\":{\"width\":1280,\"height\":720")
+            .Replace("\"fromConfig\":false}]", "\"fromConfig\":false,\"resolution\":1080,\"zoom\":{\"granted\":1080}}]"));
+        var ann = vm.Routing.Rows.Single(r => r.Name == "Ann");
+        Assert.True(ann.OfferedBelowAsked);
+        Assert.Contains("Zoom accepted 1080p", ann.OfferedTip);
+        Assert.Contains("1280×720", ann.OfferedTip);
+    }
+
+    [Fact]
+    public void AnSdkRefusalOf1080IsShownOnTheRow()
+    {
+        var (vm, _, _) = Make(InMeeting
+            .Replace("\"fromConfig\":false}]", "\"fromConfig\":false,\"resolution\":1080,\"zoom\":{\"granted\":720,\"refused\":1080,\"refusedCode\":12}}]"));
+        var ann = vm.Routing.Rows.Single(r => r.Name == "Ann");
+        Assert.Contains("refused 1080p", ann.Detail);
+        Assert.Contains("12", ann.Detail);
     }
 
     [Fact]
@@ -169,7 +233,8 @@ public sealed class ViewModelCommandTests
         var (vm, node, _) = Make(InMeeting);
         var ann = vm.Routing.Rows.Single(r => r.Name == "Ann");
         Assert.Equal(CellState.Armed, ann.IsoCells[0].State);
-        Assert.All(ann.IsoCells.Skip(1), c => Assert.Equal(CellState.Hidden, c.State));
+        // Every crosspoint stays drawn; only this guest's ISO column is live.
+        Assert.All(ann.IsoCells.Skip(1), c => Assert.Equal(CellState.Unavailable, c.State));
         await vm.Routing.ToggleAsync(ann.IsoCells[0]);
         Assert.Equal("""{"cmd":"iso","slot":1,"on":false}""", node.Sent.Single());
     }
