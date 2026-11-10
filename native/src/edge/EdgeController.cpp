@@ -4,6 +4,7 @@
 #include "edge/MeetingInput.h"
 #include "edge/SteadyClock.h"
 #include "edge/JoinFailureText.h"
+#include "edge/CommsRelay.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -20,7 +21,7 @@ constexpr auto kJoinTimeout = std::chrono::seconds(90);
 constexpr auto kEngineSilence = std::chrono::seconds(10);
 constexpr auto kReceivingWindow = std::chrono::seconds(3);
 constexpr auto kRoomMoveTimeout = std::chrono::seconds(90);
-// Zoom SDK MeetingStatus values (meeting_service_interface.h, SDK 7.0.5).
+// Zoom SDK MeetingStatus values (meeting_service_interface.h; unchanged in SDK 7.1.5).
 constexpr int kStatusReconnecting = 5;
 constexpr int kStatusJoinBreakout = 14;
 constexpr int kStatusLeaveBreakout = 15;
@@ -168,6 +169,8 @@ void EdgeController::handleCommand(const std::string& line) {
     error = cmdRecordStart();
   } else if (cmd == "record-stop") {
     error = cmdRecordStop();
+  } else if (isCommsVerb(cmd)) {
+    error = cmdComms(cmd, c);
   } else if (cmd == "quit") {
     quit_ = true;
   } else {
@@ -406,6 +409,17 @@ void EdgeController::fail(const std::string& message) {
 
 void EdgeController::stopEngine() {
   engine_.stop();
+  comms_.reset();  // a stopped engine runs no talkback
+}
+
+std::string EdgeController::cmdComms(const std::string& cmd, const Json& c) {
+  const bool inMeeting = phase_ == Phase::InMeeting && engine_.running();
+  const auto result = buildCommsEngineLine(cmd, c, inMeeting, comms_ ? &*comms_ : nullptr);
+  if (!result.error.empty()) return result.error;
+  // No engine, no keys: a release with nothing running is already true.
+  if (!engine_.running()) return {};
+  if (!engine_.send(result.engineLine)) return "Could not send the comms command to the Zoom engine.";
+  return {};
 }
 
 void EdgeController::sendSubscribe(int slot, std::uint32_t participantId) {
@@ -507,6 +521,13 @@ void EdgeController::handleNotice(const EngineNotice& notice) {
     return;
   }
   lastEngineLine_ = Clock::now();
+  if (notice.comms) {
+    if (engine_.running()) {
+      comms_ = commsStateForNode(*notice.comms);
+      markDirty();
+    }
+    return;
+  }
   const auto& e = notice.event;
   using K = modules::ZoomEngineEventKind;
   switch (e.kind) {
@@ -753,6 +774,7 @@ Json EdgeController::buildState() const {
     state.emplace("feeds", Json(std::move(feeds)));
   }
   if (movingRooms_) state.emplace("movingRooms", true);
+  if (comms_) state.emplace("comms", *comms_);
   state.emplace("recordFormat", Json(Json::Object{{"width", static_cast<double>(recordHeight_ * 16 / 9)},
                                                   {"height", static_cast<double>(recordHeight_)}}));
   if (!lastError_.empty()) state.emplace("error", lastError_);
