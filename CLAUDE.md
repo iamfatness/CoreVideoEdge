@@ -104,9 +104,9 @@ file in the same change as any substantive work.
   ~22 ms there (median, any QoS; `Platform.FiveMillisecondSleepPrecision`
   prints it) and the whole VM stalls 100-300 ms a few times a run. The
   recorder polls at ~30 Hz instead of 200 Hz, the fake's audio pacing lags its
-  clap frame by ~90 ms, six 1080p sources overrun the 4-frame ring now and
+  clap frame by 80-130 ms (run to run), six 1080p sources overrun the 4-frame ring now and
   then and a 60 fps source always does. So CI gates on four 30 fps sources
-  with `--max-skew-ms 120`; the
+  with `--max-skew-ms 250` (there the skew measures the VM, not Edge); the
   six-source take only reports; the writer's A/V placement is proven exact
   by a unit test (0.0 ms on both platforms). Do not "fix" CI by weakening a
   product rule; prove 6-8 sources on a real Mac.

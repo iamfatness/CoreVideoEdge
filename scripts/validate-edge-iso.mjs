@@ -55,7 +55,7 @@ const names = args.names ? args.names.split(',').map((s) => s.trim()).filter(Boo
 // Fake clap A/V skew limit. 45 ms (just over one frame) on real machines. The
 // fake writes audio on its video tick, so its audio lags by up to one tick
 // plus timer slack; on a VM whose 5 ms sleep takes ~22 ms (macOS CI runner,
-// measured by PlatformTest) that lag is ~90 ms. The writer's own A/V placement
+// measured by PlatformTest) that lag was 80-130 ms run to run. The writer's own A/V placement
 // is proven exact by the writer unit test, not by this number.
 const maxSkewMs = Number(args['max-skew-ms'] ?? 45);
 
