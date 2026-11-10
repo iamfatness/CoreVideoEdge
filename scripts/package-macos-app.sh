@@ -98,12 +98,16 @@ fi
 
 echo "== ad-hoc signing (code in Contents/MacOS) =="
 # First, so the app can run to render its icon (arm64 runs only signed code).
-# Every loose Mach-O in Contents/MacOS (the .NET host, native libraries, the node).
+# Every file in Contents/MacOS: the .NET host, native libraries and the node
+# (Mach-O), and also the managed .dlls and .json files, because codesign
+# treats everything in Contents/MacOS as nested code and refuses to seal the
+# bundle around an unsigned file (non-Mach-O signatures live in extended
+# attributes, so the zip must be made with ditto). This is the layout and
+# signing Avalonia documents for macOS.
 while IFS= read -r -d '' f; do
-  if file -b "$f" | grep -q 'Mach-O'; then
-    codesign --force --sign - --timestamp=none "$f"
-  fi
+  codesign --force --sign - --timestamp=none "$f" >/dev/null
 done < <(find "$app/Contents/MacOS" -type f -print0)
+echo "  signed $(find "$app/Contents/MacOS" -type f | wc -l | tr -d ' ') files"
 echo "== icon =="
 brand="$work/brand"
 "$app/Contents/MacOS/$exe_name" --render-brand "$brand"
