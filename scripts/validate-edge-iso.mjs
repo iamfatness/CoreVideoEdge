@@ -58,6 +58,10 @@ const names = args.names ? args.names.split(',').map((s) => s.trim()).filter(Boo
 // measured by PlatformTest) that lag was 80-130 ms run to run. The writer's own A/V placement
 // is proven exact by the writer unit test, not by this number.
 const maxSkewMs = Number(args['max-skew-ms'] ?? 45);
+// ISO arrivals the ring may overwrite per file. 0 on real machines (the
+// product rule). Only for a VM that stalls longer than the 4-frame ring
+// (~130 ms) a few times a run, i.e. the macOS CI runner; never for a proof.
+const maxLost = Number(args['max-lost'] ?? 0);
 
 let silentIds = new Set();
 let sawMovingRooms = false;
@@ -336,7 +340,7 @@ async function main() {
   const health = rec.streams;
   for (const s of health) {
     check(s.state === 'finalized' && !s.warning, `${s.name}: finalized (${s.encoder ?? 'encoder unknown'} encoder)${s.warning ? ' - ' + s.warning : ''}`);
-    check(s.videoLost === 0, `${s.name}: no ISO arrival lost (lost=${s.videoLost})`);
+    check(s.videoLost <= maxLost, `${s.name}: ${maxLost ? `at most ${maxLost}` : 'no'} ISO arrival lost (lost=${s.videoLost})`);
     // Live 2026-11-09: an unbounded encoder backlog took the machine to 50 GB.
     check(s.videoDropped === 0 && s.encoderBacklogPeak <= 30,
       `${s.name}: encoder kept up (backlog peak ${s.encoderBacklogPeak} samples, ${s.videoDropped} dropped)`);
