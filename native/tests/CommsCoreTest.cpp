@@ -361,3 +361,18 @@ TEST(CommsCore, TheMeterAloneDoesNotDriveTheLineAtTenHertz) {
   EXPECT_TRUE(emitter.Next(core, now, &out));
   EXPECT_TRUE(out.find("\"keyed\":true") != std::string::npos);
 }
+
+TEST(CommsCore, AClosedMeetingMicIsTheReasonAndKeysAreRefused) {
+  // The mic rule kept the meeting mic closed (no licence, or the virtual mic
+  // never initialised): nothing keyed would be heard, so say so plainly.
+  Rig r;
+  r.bringUp();
+  r.in.mic_blocked = "Talkback is silent: the silent virtual mic never initialised.";
+  r.tick();
+  EXPECT_FALSE(r.core.available());
+  EXPECT_EQ(r.core.reason(), r.in.mic_blocked);
+  EXPECT_FALSE(r.core.Apply(ParseCommsCommand(R"({"cmd":"comms_key","slot":0,"on":true})"), r.now).empty());
+  r.in.mic_blocked.clear();
+  r.tick();
+  EXPECT_TRUE(r.core.available());
+}

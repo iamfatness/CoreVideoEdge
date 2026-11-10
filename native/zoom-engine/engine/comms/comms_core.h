@@ -108,6 +108,9 @@ struct CommsInputs {
   bool supported = false;       // IsMeetingSupportTalkBack()
   bool host_or_cohost = false;  // this station's role
   bool mic_open = false;        // our meeting audio is joined AND unmuted (law 1)
+  // Non-empty: talkback would be silent because the mic rule keeps our
+  // meeting mic closed (MicGuard::blocked_reason). Becomes the reason.
+  std::string mic_blocked;
   std::vector<zc::RosterMember> roster;  // everyone except this station
   int64_t now_ms = 0;
 };

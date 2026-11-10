@@ -191,7 +191,9 @@ while something changed; the node publishes it with its normal state cadence.
   `"Not in a meeting."`, `"Talkback is unavailable: the Zoom SDK returned no
   talkback controller."`, `"This meeting does not support Zoom talkback."`,
   `"Make this account host or co-host to bring talkback up."`,
-  `"Zoom refused talkback: <SDK text verbatim>"`. While channels are still
+  `"Zoom refused talkback: <SDK text verbatim>"`, or a `"Talkback is silent:
+  ..."` sentence when the mic rule keeps this node's meeting mic muted (no
+  raw-data licence, the virtual mic never initialised or was dropped). While channels are still
   forming `available` is true and `channels[].ready` false.
 - `lamps.link`: in the meeting. `lamps.meetingMic`: this node's meeting audio
   is open (talkback is ACCEPTED but SILENT while it is closed: ZComms delivery
@@ -224,10 +226,13 @@ quits the node, which sends `comms_release_all` and then stops the engine.
 
 **The station's microphone.** Comms opens this node's meeting mic (talkback
 is silent while it is muted) only behind a never-fed virtual mic, so the room
-hears nothing, and only for a capture-only join with the raw-data licence. If
-the virtual mic does not come up within 1.5 s, or is ever dropped, the mic is
-muted at once and stays muted for that meeting (the reason is in `log`,
-`lamps.meetingMic` goes dark). The real microphone is never open to the room.
+hears nothing, and only for a capture-only join with the raw-data licence.
+The mic is unmuted only AFTER Zoom confirms the virtual mic is initialised. If
+that never happens (5 s), or the virtual mic is ever dropped, the mic stays /
+goes muted for that meeting: `available` is false with `reason` saying why
+(e.g. `"Talkback is silent: the silent virtual mic never initialised ..."`),
+`lamps.meetingMic` is dark, and the event is in `log`. The real microphone is
+never open to the room.
 
 **Engine lines** (between the node and its engine; apps never send these --
 the node relays): P2E `comms_key {"slot":0..15|"all","on":bool[,"lease_ms"]}`,

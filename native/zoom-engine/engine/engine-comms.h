@@ -19,10 +19,11 @@
 //     the engine joins capture-only with our mic muted (delta 1). When the
 //     station can run talkback it installs a never-fed virtual mic
 //     (setExternalAudioSource -- open but silent to the room, the ZoomISO /
-//     ZComms auto-suppress) and only THEN unmutes us and keeps us unmuted
-//     (re-asserted every 2 s). If the silent mic cannot be installed the
-//     meeting mic is NEVER opened -- the room would hear this PC's mic -- and
-//     the MTG MIC lamp stays dark with the reason in the ops log;
+//     ZComms auto-suppress) and only once Zoom confirms it initialised
+//     (onMicInitialize) unmutes us and keeps us unmuted (re-asserted every
+//     2 s). Without that proof the meeting mic is NEVER opened -- the room
+//     would hear this PC's mic -- and the reason is the comms state reason
+//     (comms/mic_guard decides all of it);
 //   - a comms failure never touches subscriptions, ISO or raw media: no call
 //     here reaches EngineVideo/EngineAudio/EngineShare, and every tick is
 //     exception-fenced.

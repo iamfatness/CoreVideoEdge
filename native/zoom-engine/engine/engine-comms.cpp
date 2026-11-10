@@ -462,12 +462,15 @@ void tick()
             const bool ok = err == ZOOMSDK::SDKERR_SUCCESS;
             if (ok) s.silent_mic_ever = true;
             s.guard.InstallResult(ok, "setExternalAudioSource " + std::to_string(static_cast<int>(err)), now);
-            g_owns_mic.store(s.guard.owns());  // provisional: the watchdog decides
+            g_owns_mic.store(s.guard.owns());  // false: nothing is owned before onMicInitialize
             EngineIpc::write(R"({"cmd":"debug","stage":"comms_silent_mic","code":)" +
                              std::to_string(static_cast<int>(err)) + "}");
             break;
         }
         case edgecomms::MicGuard::Act::Unmute: {
+            // Ownership is only ever taken after onMicInitialize; publish it
+            // before unmuting so capture-only does not fight the unmute.
+            g_owns_mic.store(s.guard.owns());
             auto *audio_ctrl = svc->GetMeetingAudioController();
             const ZOOMSDK::SDKError err =
                 audio_ctrl ? audio_ctrl->UnMuteAudio(me->GetUserID()) : ZOOMSDK::SDKERR_UNINITIALIZE;
@@ -487,6 +490,7 @@ void tick()
         }
         g_owns_mic.store(s.guard.owns());
         flush_guard_log();
+        in.mic_blocked = s.guard.blocked_reason();
         in.mic_open = me && me->GetAudioJoinType() != ZOOMSDK::AUDIOTYPE_NONE && !me->IsAudioMuted();
     }
 

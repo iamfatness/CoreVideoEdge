@@ -34,9 +34,9 @@ hand-diverge.
   waits for the bank to settle).
 - `comms_protocol.h`: the comms_* P2E line parser.
 - `mic_guard.{h,cpp}`: the rule that the real microphone is never open to the
-  room (when the virtual mic may be installed, the provisional ownership and
-  its 1.5 s init watchdog, the immediate revoke on a drop, retry policy, the
-  non-capture-only case). Pure, unit-tested in `native/tests/MicGuardTest.cpp`.
+  room (when the virtual mic may be installed, ownership and the unmute only
+  after `onMicInitialize`, the 5 s give-up, the immediate revoke on a drop,
+  retry policy, the non-capture-only case). Pure, unit-tested in `native/tests/MicGuardTest.cpp`.
 
 ## Not ported
 

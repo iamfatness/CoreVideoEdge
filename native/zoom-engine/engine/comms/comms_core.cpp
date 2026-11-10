@@ -205,6 +205,11 @@ void CommsCore::Tick(const CommsInputs& in) {
       eligible_ = true;  // still retrying in the background
       available_ = false;
       reason_ = "Zoom refused talkback: " + create_error_;
+    } else if (!in.mic_blocked.empty()) {
+      // Channels may be fine, but nothing keyed would be heard: say so
+      // instead of offering keys that deliver silence.
+      available_ = false;
+      reason_ = in.mic_blocked;
     } else {
       available_ = true;
     }

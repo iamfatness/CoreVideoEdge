@@ -6,6 +6,7 @@ void MicGuard::Reset() {
   installed_ = owns_ = seen_initialised_ = gave_up_ = false;
   logged_install_failure_ = logged_no_licence_ = logged_operator_muted_ = false;
   installed_at_ms_ = retry_at_ms_ = next_unmute_ms_ = 0;
+  blocked_.clear();
 }
 
 std::vector<std::string> MicGuard::TakeLog() {
@@ -14,26 +15,28 @@ std::vector<std::string> MicGuard::TakeLog() {
   return out;
 }
 
-void MicGuard::GiveUp(const std::string& why) {
+void MicGuard::GiveUp(const std::string& reason) {
   owns_ = false;
   gave_up_ = true;
-  Log(why + " -- meeting mic MUTED so the room never hears this PC; talkback is silent for this meeting");
+  blocked_ = reason;
+  Log(reason);
 }
 
 bool MicGuard::Dropped() {
   seen_initialised_ = false;
   if (!owns_) return false;
-  GiveUp("silent virtual mic was dropped by Zoom");
+  GiveUp("Talkback is silent: Zoom dropped the silent virtual mic, so this node's meeting mic was muted again "
+         "(the room never hears this PC).");
   return true;
 }
 
 void MicGuard::InstallResult(bool ok, const std::string& detail, int64_t now_ms) {
   if (ok) {
+    // Installed, NOT owned: the mic stays muted until the virtual mic itself
+    // confirms it is initialised.
     installed_ = true;
-    owns_ = true;  // provisional: the watchdog below decides
     installed_at_ms_ = now_ms;
-    next_unmute_ms_ = 0;
-    Log("meeting mic auto-suppressed (open but silent to the room)");
+    Log("silent virtual mic installed -- waiting for Zoom to initialise it before opening the meeting mic");
     return;
   }
   retry_at_ms_ = now_ms + kRetryMs;
@@ -46,7 +49,7 @@ void MicGuard::InstallResult(bool ok, const std::string& detail, int64_t now_ms)
 
 MicGuard::Act MicGuard::Next(const In& in) {
   if (!in.in_meeting) {
-    if (installed_ || owns_ || gave_up_) Reset();
+    if (installed_ || owns_ || gave_up_ || !blocked_.empty()) Reset();
     return Act::None;
   }
   if (!in.capture_only) {
@@ -59,15 +62,13 @@ MicGuard::Act MicGuard::Next(const In& in) {
     if (!in.self_muted) logged_operator_muted_ = false;
     return Act::None;
   }
-  // Watchdog first: it is the only path that closes an exposed mic.
+  // Owned: watch for the virtual mic going away. Mute first, always.
   if (owns_) {
-    if (in.initialised) seen_initialised_ = true;
-    if (seen_initialised_ && !in.initialised) {
-      GiveUp("silent virtual mic stopped");
-      return Act::Revoke;
-    }
-    if (!seen_initialised_ && in.now_ms - installed_at_ms_ > kInitGraceMs) {
-      GiveUp("silent virtual mic never initialised (no raw-data entitlement?)");
+    if (in.initialised) {
+      seen_initialised_ = true;
+    } else {
+      GiveUp("Talkback is silent: the silent virtual mic stopped, so this node's meeting mic was muted again "
+             "(the room never hears this PC).");
       return Act::Revoke;
     }
   }
@@ -76,16 +77,34 @@ MicGuard::Act MicGuard::Next(const In& in) {
     if (in.now_ms < retry_at_ms_) return Act::None;
     if (!in.licence) {
       retry_at_ms_ = in.now_ms + kRetryMs;
+      blocked_ =
+          "Talkback is silent: this sign-in has no Zoom raw-data licence, so the meeting mic stays muted (the room "
+          "must never hear this PC).";
       if (!logged_no_licence_) {
         logged_no_licence_ = true;
-        Log("no raw-data licence for this sign-in: the meeting mic stays closed (the room must never hear this PC), "
-            "so talkback is silent");
+        Log(blocked_);
       }
       return Act::None;
     }
+    blocked_.clear();
     return Act::Install;
   }
-  if (owns_ && in.self_muted && in.now_ms >= next_unmute_ms_) {
+  if (!owns_) {
+    // Installed, waiting for onMicInitialize. The meeting mic stays muted.
+    if (in.initialised) {
+      owns_ = true;  // only now does capture-only stand down
+      seen_initialised_ = true;
+      next_unmute_ms_ = 0;
+      Log("silent virtual mic initialised -- opening the meeting mic (silent to the room)");
+    } else {
+      if (in.now_ms - installed_at_ms_ > kInitTimeoutMs) {
+        GiveUp("Talkback is silent: the silent virtual mic never initialised (no onMicInitialize within 5 s), so "
+               "this node's meeting mic stays muted. If Zoom only initialises it once audio flows, this is why.");
+      }
+      return Act::None;
+    }
+  }
+  if (in.self_muted && in.now_ms >= next_unmute_ms_) {
     next_unmute_ms_ = in.now_ms + kUnmuteEveryMs;
     return Act::Unmute;
   }

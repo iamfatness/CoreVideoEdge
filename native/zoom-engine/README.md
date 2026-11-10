@@ -177,14 +177,16 @@ Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt
      station can run talkback (in meeting, controller, supported,
      host/co-host), and only with `HasRawdataLicense()` (without it ZComms
      found `setExternalAudioSource` can succeed and do nothing), the engine
-     installs a never-fed virtual mic, owns the mic PROVISIONALLY and unmutes
-     (`UnMuteAudio(<self id>)`, re-asserted every 2 s; not gated on init, the
-     SDK may initialise the virtual mic only once audio flows). If
-     `onMicInitialize` has not arrived 1.5 s after the install, or the virtual
-     mic is ever dropped afterwards (`onMicUninitialized` -- acted on inside
-     the callback -- or the flag going false), ownership is cleared FIRST and
-     `MuteAudio(<self id>)` sent at once, and Comms gives up the mic for that
-     meeting (a retry would re-expose the real mic for another grace window).
+     installs a never-fed virtual mic and then WAITS, still muted and not
+     owning, for the virtual mic's `onMicInitialize`. Only then does it own
+     the mic (capture-only stands down) and unmute (`UnMuteAudio(<self id>)`,
+     re-asserted every 2 s). No `onMicInitialize` within 5 s: the mic stays
+     muted, nothing is owned, Comms gives up for that meeting and the state
+     reason says the virtual mic never initialised (if the SDK only
+     initialises it once audio flows, that is what the live gate will show).
+     Once owned, any drop (`onMicUninitialized` -- acted on inside the
+     callback -- or the flag going false) clears ownership FIRST and sends
+     `MuteAudio(<self id>)` at once, and Comms gives up for the meeting.
      A synchronous install refusal exposes nothing and is retried every 5 s
      (logged once). A join that is NOT capture-only (Pro's operator who
      speaks) is never touched: no virtual mic, no unmute; the ops log says

@@ -8,16 +8,19 @@
 // SUCCEED and never take effect when the auth tier lacks the raw-data
 // entitlement (public-app-key: HasRawdataLicense() false) -- then the room
 // would hear this PC. So "owning" the mic (capture-only standing down and the
-// engine unmuting us) is PROVISIONAL:
+// engine unmuting us) waits for PROOF:
 //
 //   - no raw-data licence: never install, never own;
-//   - install OK: own provisionally and unmute (the SDK may only initialise
-//     the virtual mic once audio flows, so the unmute is not gated on it);
-//   - the virtual mic must report onMicInitialize within kInitGraceMs of the
-//     install, else: revoke (stop owning, mute us NOW) and give up for the
-//     meeting -- retrying would re-open the real mic for another grace window;
-//   - once initialised, any sign it was dropped (onMicUninitialized, the flag
-//     going false) revokes immediately, and likewise gives up for the meeting;
+//   - install OK: still NOT owned and still muted; only when the virtual mic
+//     reports onMicInitialize does the guard take ownership and unmute (owner
+//     ruling 2026-11-09: no window, however short, where the real mic could
+//     reach the room);
+//   - no onMicInitialize within kInitTimeoutMs: stay muted, never own, give
+//     up for the meeting and say so plainly (blocked_reason) -- the live gate
+//     tells us whether the SDK only initialises once audio flows;
+//   - once owned, any sign the virtual mic was dropped (onMicUninitialized,
+//     the flag going false) revokes immediately -- ownership off, mute -- and
+//     gives up for the meeting;
 //   - a synchronous install refusal costs nothing (we never unmuted), so it
 //     is retried every kRetryMs; only the first refusal is logged;
 //   - a non-capture-only join (an operator who speaks in the meeting) is never
@@ -36,7 +39,7 @@ namespace edgecomms {
 
 class MicGuard {
  public:
-  static constexpr int64_t kInitGraceMs = 1500;
+  static constexpr int64_t kInitTimeoutMs = 5000;
   static constexpr int64_t kRetryMs = 5000;
   static constexpr int64_t kUnmuteEveryMs = 2000;
 
@@ -62,12 +65,15 @@ class MicGuard {
   bool owns() const { return owns_; }
   bool installed() const { return installed_; }
   bool gave_up() const { return gave_up_; }
+  // Non-empty while talkback is silent because of the mic rule; operator text
+  // for the comms state reason.
+  const std::string& blocked_reason() const { return blocked_; }
   // Ops-log lines produced since the last call.
   std::vector<std::string> TakeLog();
 
  private:
   void Log(std::string line) { log_.push_back(std::move(line)); }
-  void GiveUp(const std::string& why);
+  void GiveUp(const std::string& reason);
 
   bool installed_ = false;
   bool owns_ = false;
@@ -79,6 +85,7 @@ class MicGuard {
   int64_t installed_at_ms_ = 0;
   int64_t retry_at_ms_ = 0;
   int64_t next_unmute_ms_ = 0;
+  std::string blocked_;
   std::vector<std::string> log_;
 };
 

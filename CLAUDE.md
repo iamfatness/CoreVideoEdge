@@ -109,11 +109,15 @@ file in the same change as any substantive work.
   our mic is muted (ZComms law 1), so Comms opens it -- but only behind a
   never-fed virtual mic, and `setExternalAudioSource` returning SUCCESS proves
   nothing: without the raw-data licence it can succeed and do nothing
-  (ZComms). So: require `HasRawdataLicense()`; ownership is PROVISIONAL until
-  `onMicInitialize` (1.5 s grace), and any drop (`onMicUninitialized`, flag
-  false) clears ownership FIRST then `MuteAudio(self)` at once, giving up for
-  the meeting. All of it lives in `comms/mic_guard` (pure, tested); the engine
-  only performs. Never "fix" a closed mic by unmuting.
+  (ZComms). So: require `HasRawdataLicense()`; after the install the mic
+  stays MUTED and un-owned until the virtual mic reports `onMicInitialize`
+  -- only then does capture-only stand down and the engine unmute (owner
+  ruling 2026-11-09: not even a 1.5 s window was acceptable). No init within
+  5 s: stay muted, give up for the meeting, `comms.reason` says the virtual
+  mic never initialised. Any later drop (`onMicUninitialized`, flag false)
+  clears ownership FIRST then `MuteAudio(self)` at once. All of it lives in
+  `comms/mic_guard` (pure, tested); the engine only performs. Never "fix" a
+  closed mic by unmuting.
 - **Mic ownership is cleared synchronously on every meeting status change**
   (`EngineComms::on_meeting_status`, first line of `onMeetingStatusChanged`).
   A tick-driven reset left `owns_mic()` true across a fast leave/rejoin, so
@@ -224,10 +228,11 @@ screenshot after a UI change. Never drive the desktop; use the control API or th
 ## Not yet verified (be honest about it)
 
 - **Comms against real Zoom: nothing.** The real engine compiles and links on
-  SDK 7.1.5; the talkback path, the silent virtual mic (including whether
-  `onMicInitialize` really arrives within 1.5 s of the install on a licensed
-  sign-in -- if not, the guard mutes and talkback is silent), unmute under
-  capture-only, channel creation as co-host, delivery to a desktop guest, the
+  SDK 7.1.5; the talkback path, the silent virtual mic (above all: does
+  `onMicInitialize` arrive within 5 s of the install while we are still
+  MUTED? If the SDK only initialises it once audio flows, the guard never
+  unmutes and `comms.reason` says the virtual mic never initialised -- the
+  live gate decides), unmute under capture-only, channel creation as co-host, delivery to a desktop guest, the
   duck, breakout moves (channel re-creation vs the 16 cap) and raw video/ISO
   on 7.1.5 in a live meeting are all unproven. Only the fake (unit tests,
   probe, validator) has run.
