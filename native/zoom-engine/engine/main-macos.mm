@@ -26,6 +26,31 @@
 //   - raw_media_status events on every start/stop; join failures carry
 //     {stage,msg,code,reason}; mono raw audio (ISO-2 stems assume mono)
 //
+// CoreVideo Edge deltas (vendored from CoreVideo Pro main @ 219ca1db on
+// 2026-11-09; the list lives in zoom-engine/README.md, keep both exact). They
+// bring this engine to what Edge's Windows engine does and the node needs:
+//   E1 capture-only join ("capture_only":true): join camera-off, keep VoIP
+//      audio, mute OUR OWN mic and stop OUR OWN camera whenever the roster
+//      shows either on (never user 0: that is everyone); bounded at 20
+//      re-applications; self_user_unavailable / meeting_keeps_unmuting errors.
+//   E2 ISO arrival ring: the "iso_video" command arms a per-source 4-slot
+//      ring ("<prefix><uuid>-iso", iso-video-ring.h) written on every frame
+//      with a steady_clock capture stamp (IsoVideoDemand, cap 8).
+//   E3 video regions at the fixed 1080p capacity (i420_region_capacity), as
+//      the Windows engine: a ramp never re-creates the region, and a frame
+//      larger than 1080p is dropped loudly, never truncated.
+//   E4 limited-range frames expanded to full range (I420RangeNormalizer +
+//      I420ContentRangeTracker, the Windows engine's fix for the SDK
+//      ignoring the BT709_F request); COREVIDEO_ZOOM_RANGE_CORRECTION=0 turns
+//      the content tracker off, as on Windows.
+//   E5 commands matched on the JSON "cmd" value (ipc_command_is), not by
+//      substring: a display name containing "init" or "quit" must not
+//      re-initialize or kill the engine.
+//   E6 same-account collision (onEndOtherMeetingToJoinMeetingNotification):
+//      end the other meeting only when the join said "end_other_meeting":true;
+//      otherwise cancel and fail the join with reason account-busy-elsewhere
+//      (Windows engine #475 behaviour).
+//
 // ── Threading (the constraint that shapes this file) ─────────────────────────
 // The macOS SDK delivers every result through Objective-C delegate callbacks
 // dispatched on the main run loop — the SDK's own sample app is a plain Cocoa
@@ -71,6 +96,10 @@
 
 #include "engine-ipc.h"
 #include "engine-writer.h"
+#include "i420-content-range-tracker.h"  // Edge E4
+#include "i420-range-expand.h"           // Edge E4
+#include "iso-video-demand.h"            // Edge E2
+#include "iso-video-ring.h"              // Edge E2
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -290,7 +319,7 @@ static void handle_init(const std::string &line)
             R"(","reason":"ZoomSDK.framework is not in the engine app's )"
             R"(Frameworks directory. The macOS Zoom SDK loads its runtime )"
             R"(bundles from there, so authentication cannot work without it. )"
-            R"(Rebuild the bundle with scripts/make-macos-bundle.sh. Looked in: )" +
+            R"(Rebuild the bundle with scripts/make-macos-engine-bundle.sh (corevideo-zoom-engine.app). Looked in: )" +
             json_escape(frameworks_dir) + "\"}");
         return;
     }
@@ -565,6 +594,55 @@ static void send_roster()
     EngineIpc::write(msg);
 }
 
+// ── Edge E1: capture-only join ───────────────────────────────────────────────
+// Main queue only (set in handle_join, read from the meeting delegate). Mutes
+// OUR OWN mic and stops OUR OWN camera whenever the roster shows either on.
+// Never user 0 (on Windows MuteAudio(0) mutes every participant; on macOS 0
+// means "the current user" in some builds and not others — do not find out
+// live). If our own user cannot be resolved the call is refused and reported.
+static bool g_capture_only = false;
+static int g_capture_only_attempts = 0;
+
+static void enforce_capture_only(const char *reason)
+{
+    if (!g_capture_only) return;
+    ZoomSDKMeetingActionController *ctrl = action_controller();
+    if (!ctrl) return;
+    ZoomSDKUserInfo *me = [ctrl getMyself];
+    const unsigned int my_id = me ? [me getUserID] : 0;
+    if (!me || my_id == 0) {
+        EngineIpc::write(std::string(R"({"cmd":"error","stage":"capture_only","reason":"self_user_unavailable","trigger":")") +
+                         reason + "\"}");
+        return;
+    }
+    const ZoomSDKAudioStatus audio = [me getAudioStatus];
+    const bool muted = audio == ZoomSDKAudioStatus_None || audio == ZoomSDKAudioStatus_Muted ||
+                       audio == ZoomSDKAudioStatus_MutedByHost || audio == ZoomSDKAudioStatus_MutedAllByHost;
+    const bool mic_open = [me getAudioType] != ZoomSDKAudioType_None && !muted;
+    const bool camera_on = [me isVideoOn] ? true : false;
+    if (!mic_open && !camera_on) return;
+    // Bounded: a meeting policy that keeps forcing us live must surface as an
+    // error, not as an endless mute loop.
+    if (++g_capture_only_attempts > 20) {
+        if (g_capture_only_attempts == 21)
+            EngineIpc::write(R"({"cmd":"error","stage":"capture_only","reason":"meeting_keeps_unmuting"})");
+        return;
+    }
+    if (mic_open) {
+        const ZoomSDKError err = [ctrl actionMeetingWithCmd:ActionMeetingCmd_MuteAudio userID:my_id onScreen:ScreenType_First];
+        EngineIpc::write(std::string(R"({"cmd":"debug","stage":"capture_only_mute","trigger":")") + reason +
+                         R"(","code":)" + std::to_string(static_cast<int>(err)) + "}");
+    }
+    if (camera_on) {
+        const ZoomSDKError err = [ctrl actionMeetingWithCmd:ActionMeetingCmd_MuteVideo userID:my_id onScreen:ScreenType_First];
+        EngineIpc::write(std::string(R"({"cmd":"debug","stage":"capture_only_video_off","trigger":")") + reason +
+                         R"(","code":)" + std::to_string(static_cast<int>(err)) + "}");
+    }
+}
+
+// Edge E6: set per join on the main queue, read by the meeting delegate.
+static bool g_end_other_meeting = false;
+
 // ── Meeting + roster delegate ────────────────────────────────────────────────
 // Reproduces onMeetingStatusChanged / the participants-controller callbacks from
 // engine/src/main.cpp. Every method of ZoomSDKMeetingActionControllerDelegate is
@@ -603,6 +681,8 @@ static void send_roster()
         ctrl.delegate = self;
         share_attach();
         rebuild_roster();
+        g_capture_only_attempts = 0;
+        enforce_capture_only("in_meeting");  // Edge E1
         send_roster();
         break;
     }
@@ -637,11 +717,33 @@ static void send_roster()
 - (void)onUserJoin:(NSArray *)array { rebuild_roster(); send_roster(); }
 - (void)onUserLeft:(NSArray *)array { rebuild_roster(); send_roster(); }
 - (void)onUserNamesChanged:(NSArray<NSNumber *> *)userList { rebuild_roster(); send_roster(); }
-- (void)onUserAudioStatusChange:(NSArray *)userAudioStatusArray { rebuild_roster(); send_roster(); }
+- (void)onUserAudioStatusChange:(NSArray *)userAudioStatusArray
+{
+    rebuild_roster();
+    enforce_capture_only("audio_status");  // Edge E1
+    send_roster();
+}
 - (void)onVideoStatusChange:(ZoomSDKVideoStatus)videoStatus UserID:(unsigned int)userID
 {
     rebuild_roster();
+    enforce_capture_only("video_status");  // Edge E1
     send_roster();
+}
+
+// Edge E6 (Windows engine #475): the SDK asks before ending this account's
+// other meeting. Answer now; the operator chose before the join was sent.
+- (void)onEndOtherMeetingToJoinMeetingNotification:(ZoomSDKError (^)(void))actionEndOtherMeeting
+                                       actionCancel:(void (^)(void))actionCancel
+{
+    if (g_end_other_meeting && actionEndOtherMeeting) {
+        EngineIpc::write(R"({"cmd":"debug","stage":"end_other_meeting","action":"end"})");
+        actionEndOtherMeeting();
+        return;
+    }
+    // Never end the operator's own meeting out from under them.
+    if (actionCancel) actionCancel();
+    EngineIpc::write(
+        R"({"cmd":"error","stage":"join","msg":"join_failed","reason":"account-busy-elsewhere"})");
 }
 
 - (void)onUserActiveAudioChange:(NSArray *)useridArray
@@ -752,9 +854,15 @@ static void handle_join(const std::string &line)
     const std::string user_zak            = json_str(line, "user_zak");
     const std::string app_privilege_token = json_str(line, "app_privilege_token");
     if (display_name.empty()) display_name = "CoreVideo Pro";
+    // Edge E6: an EXPLICIT per-join choice, re-read on every join.
+    g_end_other_meeting = line.find("\"end_other_meeting\":true") != std::string::npos;
+    // Edge E1: a capture device, not a gallery participant.
+    g_capture_only = line.find("\"capture_only\":true") != std::string::npos;
+    g_capture_only_attempts = 0;
 
     EngineIpc::write(R"({"cmd":"debug","stage":"join_received","meeting_id":")" +
-        json_escape(meeting_id) + R"(","has_on_behalf_token":)" +
+        json_escape(meeting_id) + R"(","capture_only":)" +
+        std::string(g_capture_only ? "true" : "false") + R"(,"has_on_behalf_token":)" +
         std::string(on_behalf_token.empty() ? "false" : "true") +
         R"(,"has_user_zak":)" +
         std::string(user_zak.empty() ? "false" : "true") +
@@ -789,8 +897,8 @@ static void handle_join(const std::string &line)
     g_join_ctx.onBehalfToken     = ns_or_nil(on_behalf_token);
     g_join_ctx.zak               = ns_or_nil(user_zak);
     g_join_ctx.appPrivilegeToken = ns_or_nil(app_privilege_token);
-    g_join_ctx.isNoVideo         = NO;
-    g_join_ctx.isNoAudio         = NO;
+    g_join_ctx.isNoVideo         = g_capture_only ? YES : NO;  // Edge E1: join camera-off
+    g_join_ctx.isNoAudio         = NO;  // VoIP stays connected: raw audio depends on it
     g_join_ctx.isMyVoiceInMix    = YES;
     // Match the Windows engine's raw-media negotiation exactly: the plugin's
     // read side assumes 48 kHz PCM and full-range BT.709 I420.
@@ -885,6 +993,8 @@ static uint32_t shm_seq_begin(uint32_t current)
 // C++ ivars inside an ObjC class.
 struct VideoTarget {
     ShmRegion shm;
+    ShmRegion iso_shm;              // Edge E2: arrival ring, mapped while armed
+    uint64_t  iso_failures = 0;
     uint64_t  frame_count = 0;
     uint32_t  last_beacon_w = 0;    // beacon dedup: emit on dims change
     uint32_t  last_beacon_h = 0;
@@ -897,7 +1007,29 @@ struct VideoSubscription {
     ZoomSDKRenderer *renderer = nil;
     id delegate = nil;              // CVRenderer, retained for the renderer's life
     std::unordered_map<std::string, VideoTarget> targets;
+    // Edge E4, guarded by g_video_mtx like the targets.
+    I420RangeNormalizer range_normalizer;
+    I420ContentRangeTracker content_range;
+    uint64_t limited_frames = 0;
+    bool capacity_reported = false;
 };
+
+// Edge E4: COREVIDEO_ZOOM_RANGE_CORRECTION=0 rolls the content tracker back to
+// trusting isLimitedI420 alone (the Windows engine's switch).
+static bool content_range_correction_enabled()
+{
+    static const bool enabled = [] {
+        const char *v = std::getenv("COREVIDEO_ZOOM_RANGE_CORRECTION");
+        return !v || !(v[0] == '0' && v[1] == '\0');
+    }();
+    return enabled;
+}
+
+static void video_target_release(VideoTarget &target)
+{
+    shm_region_destroy(target.shm);
+    shm_region_destroy(target.iso_shm);
+}
 
 static std::mutex g_video_mtx;
 static std::unordered_map<uint32_t, VideoSubscription> g_video;      // by participant
@@ -1032,20 +1164,31 @@ static void copy_i420_even(char *dst, ZoomSDKYUVRawDataI420 *data,
     }
 }
 
+// Edge E3: allocate at FULL 1080p CAPACITY, never frame-sized (the Windows
+// engine's rule). On macOS a frame-sized region re-created on every resolution
+// ramp is a NEW POSIX object each time (engine-ipc.h unlinks before create);
+// at fixed capacity the region is created once per binding.
 static bool video_ensure_shm(VideoTarget &target, const std::string &source_uuid,
                              size_t y_len)
 {
     const size_t total = sizeof(ShmFrameHeader) + y_len + y_len / 4 + y_len / 4;
     if (total < y_len) return false;
-    if (target.shm.ptr && target.shm.size >= total) return true;
+    const size_t capacity = i420_region_capacity(kMaxVideoShmYLen);
+    if (total > capacity) return false;  // >1080p on a 1080p subscription: drop loud, never truncate
+    if (target.shm.ptr && target.shm.size >= capacity) return true;
 
     const std::string region_name = EngineIpc::shm_prefix() + source_uuid;
-    return shm_region_create(target.shm, region_name, total);
+    return shm_region_create(target.shm, region_name, capacity);
 }
 
 static void video_on_frame(uint32_t participant_id, ZoomSDKYUVRawDataI420 *data)
 {
     if (!data) return;
+    // Edge E2: the ISO ring's capture stamp. steady_clock is one system-wide
+    // monotonic clock on macOS too, the same timeline the node's take epoch
+    // is read from (edge/SteadyClock.h).
+    const int64_t captured100ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count() / 100;
     const uint32_t src_w = [data getStreamWidth];
     const uint32_t src_h = [data getStreamHeight];
     uint32_t w = src_w, h = src_h;
@@ -1067,8 +1210,51 @@ static void video_on_frame(uint32_t participant_id, ZoomSDKYUVRawDataI420 *data)
     if (!lock.owns_lock()) return;
     auto sub = g_video.find(participant_id);
     if (sub == g_video.end()) return;
+    VideoSubscription &subscription = sub->second;
 
-    for (auto &entry : sub->second.targets) {
+    if (y_len > kMaxVideoShmYLen) {
+        if (!subscription.capacity_reported) {
+            subscription.capacity_reported = true;
+            EngineIpc::write(
+                R"({"cmd":"debug","stage":"video_frame_exceeds_shm_capacity","participant_id":)" +
+                std::to_string(participant_id) + R"(,"w":)" + std::to_string(w) +
+                R"(,"h":)" + std::to_string(h) + "}");
+        }
+        return;
+    }
+
+    // Edge E4: expand studio-swing frames to full range before fan-out. Only
+    // uncropped frames (camera video is always even); a cropped odd-size frame
+    // keeps its raw planes through copy_i420_even below.
+    const bool cropped = w != src_w || h != src_h;
+    const auto *rawY = reinterpret_cast<const uint8_t *>([data getYBuffer]);
+    const auto *rawU = reinterpret_cast<const uint8_t *>([data getUBuffer]);
+    const auto *rawV = reinterpret_cast<const uint8_t *>([data getVBuffer]);
+    I420RangeNormalizer::Planes planes{rawY, rawU, rawV};
+    if (!cropped) {
+        const bool sdkLimited = [data isLimitedI420] ? true : false;
+        bool limited = sdkLimited;
+        if (content_range_correction_enabled()) {
+            const auto decision = subscription.content_range.classify(rawY, y_len, sdkLimited);
+            limited = decision.limited;
+            if (decision.transition) {
+                EngineIpc::write(R"({"cmd":"debug","stage":"video_range_classified","participant_id":)" +
+                                 std::to_string(participant_id) + ",\"sdkLimited\":" +
+                                 (sdkLimited ? "true" : "false") + ",\"contentLimited\":" +
+                                 (limited ? "true" : "false") + ",\"matchedCompression\":" +
+                                 (decision.matchedCompression ? "true" : "false") +
+                                 ",\"outside\":" + std::to_string(decision.outside) +
+                                 ",\"sampled\":" + std::to_string(decision.sampled) + '}');
+            }
+        }
+        planes = subscription.range_normalizer.normalize(rawY, rawU, rawV, y_len, limited, kMaxVideoShmYLen);
+        if (!planes.y) return;  // capacity was checked above; defensive
+        if (limited && (++subscription.limited_frames == 1 || subscription.limited_frames % 100 == 0))
+            EngineIpc::write(R"({"cmd":"debug","stage":"video_limited_range_expanded","count":)" +
+                             std::to_string(subscription.limited_frames) + "}");
+    }
+
+    for (auto &entry : subscription.targets) {
         const std::string &source_uuid = entry.first;
         VideoTarget &target = entry.second;
 
@@ -1106,12 +1292,35 @@ static void video_on_frame(uint32_t participant_id, ZoomSDKYUVRawDataI420 *data)
         hdr->height = h;
         hdr->y_len  = static_cast<uint32_t>(y_len);
 
-        copy_i420_even(pixels, data, w, h, src_w);
+        if (cropped) {
+            copy_i420_even(pixels, data, w, h, src_w);
+        } else {
+            std::memcpy(pixels, planes.y, y_len);
+            std::memcpy(pixels + y_len, planes.u, y_len / 4);
+            std::memcpy(pixels + y_len + y_len / 4, planes.v, y_len / 4);
+        }
         std::atomic_thread_fence(std::memory_order_release);
         hdr->sequence = seq + 1;
 
+        // Edge E2: every frame into the armed source's arrival ring, with the
+        // published (even) sequence and the capture stamp.
+        const uint32_t iso_epoch = IsoVideoDemand::instance().get(source_uuid);
+        if (!iso_epoch) {
+            if (target.iso_shm.ptr) shm_region_destroy(target.iso_shm);
+        } else {
+            const std::string iso_name = EngineIpc::shm_prefix() + source_uuid + "-iso";
+            const bool mapped = target.iso_shm.ptr || shm_region_create(target.iso_shm, iso_name, zoom_iso::bytes);
+            const auto *published = reinterpret_cast<const uint8_t *>(pixels);
+            if (!mapped || !zoom_iso::write(target.iso_shm.ptr, target.iso_shm.size, iso_epoch, seq + 1, w, h,
+                                            published, published + y_len, published + y_len + y_len / 4,
+                                            captured100ns)) {
+                if (++target.iso_failures == 1 || target.iso_failures % 300 == 0)
+                    EngineIpc::write(R"({"cmd":"error","stage":"iso_video","reason":"arrival_ring_write_failed"})");
+            }
+        }
+
         ++target.frame_count;
-        if (target.frame_count == 1 && (w != src_w || h != src_h)) {
+        if (target.frame_count == 1 && cropped) {
             EngineIpc::write(
                 R"({"cmd":"debug","stage":"video_frame_cropped_to_even","source_uuid":")" +
                 source_uuid + R"(","src_w":)" + std::to_string(src_w) +
@@ -1130,8 +1339,7 @@ static void video_on_frame(uint32_t participant_id, ZoomSDKYUVRawDataI420 *data)
         // Pro protocol: "frame" pipe events are DISCOVERY beacons (first frame,
         // dims change, every 30th), never per-frame — the core polls the SHM
         // region at tick rate and per-frame events would saturate the pipe
-        // (mirrors engine-video.cpp). A dims change also tells the core to
-        // remap a region the resize above just recreated.
+        // (mirrors engine-video.cpp).
         const bool dimsChanged = w != target.last_beacon_w || h != target.last_beacon_h;
         if (target.frame_count == 1 || dimsChanged || target.frame_count % 30 == 0) {
             target.last_beacon_w = w;
@@ -1164,7 +1372,7 @@ static void video_teardown_locked(uint32_t participant_id)
     }
     [it->second.delegate release];
     it->second.delegate = nil;
-    for (auto &t : it->second.targets) shm_region_destroy(t.second.shm);
+    for (auto &t : it->second.targets) video_target_release(t.second);  // Edge E2: the ISO ring too
     g_video.erase(it);
 }
 
@@ -1202,7 +1410,7 @@ static void video_subscribe(uint32_t participant_id, const std::string &source_u
         if (old != g_video.end()) {
             auto t = old->second.targets.find(source_uuid);
             if (t != old->second.targets.end()) {
-                shm_region_destroy(t->second.shm);
+                video_target_release(t->second);
                 old->second.targets.erase(t);
             }
             if (old->second.targets.empty()) video_teardown_locked(bound->second);
@@ -1321,7 +1529,7 @@ static void video_unsubscribe(const std::string &source_uuid)
     if (sub == g_video.end()) return;
     auto t = sub->second.targets.find(source_uuid);
     if (t != sub->second.targets.end()) {
-        shm_region_destroy(t->second.shm);
+        video_target_release(t->second);
         sub->second.targets.erase(t);
     }
     if (sub->second.targets.empty()) video_teardown_locked(participant_id);
@@ -2289,26 +2497,34 @@ int main(int argc, char **argv)
             if (line.empty())
                 continue;
 
-            if (line.find(IPC_CMD_QUIT) != std::string::npos)
+            // Edge E5: every command is matched on the JSON "cmd" value. The
+            // substring dispatch this replaced sent a join whose display name
+            // contained "init" to handle_init, and "quit" anywhere killed us.
+            if (ipc_command_is(line, IPC_CMD_QUIT))
                 break;
 
             // Copy for the block: `line` is reused by the next read.
             const std::string msg = line;
-            // Ordered like main.cpp's command loop. These are substring matches
-            // on the whole line, so the order is the disambiguation: check the
-            // longer/more specific commands before their prefixes.
-            if (msg.find(IPC_CMD_INIT) != std::string::npos) {
+            if (ipc_command_is(msg, IPC_CMD_INIT)) {
                 dispatch_async(dispatch_get_main_queue(), ^{ handle_init(msg); });
-            } else if (msg.find(IPC_CMD_JOIN) != std::string::npos) {
+            } else if (ipc_command_is(msg, IPC_CMD_JOIN)) {
                 dispatch_async(dispatch_get_main_queue(), ^{ handle_join(msg); });
-            } else if (msg.find(IPC_CMD_LEAVE) != std::string::npos) {
+            } else if (ipc_command_is(msg, IPC_CMD_LEAVE)) {
                 dispatch_async(dispatch_get_main_queue(), ^{ handle_leave(); });
-            } else if (msg.find(IPC_CMD_START_MEDIA) != std::string::npos) {
+            } else if (ipc_command_is(msg, IPC_CMD_START_MEDIA)) {
                 dispatch_async(dispatch_get_main_queue(),
                                ^{ handle_start_media("manual_start"); });
-            } else if (msg.find(IPC_CMD_STOP_MEDIA) != std::string::npos) {
+            } else if (ipc_command_is(msg, IPC_CMD_STOP_MEDIA)) {
                 dispatch_async(dispatch_get_main_queue(),
                                ^{ handle_stop_media("manual_stop"); });
+            } else if (ipc_command_is(msg, "iso_video")) {
+                // Edge E2: arm (epoch != 0) or disarm (0) a source's arrival
+                // ring. IsoVideoDemand is its own leaf lock; no SDK call, so it
+                // runs here rather than behind queued main-queue work.
+                const std::string uuid = json_str(msg, "source_uuid");
+                const uint32_t epoch = json_uint(msg, "epoch");
+                if (is_valid_source_uuid(uuid) && !IsoVideoDemand::instance().set(uuid, epoch))
+                    EngineIpc::write(R"({"cmd":"error","stage":"iso_video","reason":"arrival_ring_capacity"})");
             } else if (ipc_command_is(msg, IPC_CMD_SUBSCRIBE_AUDIO)) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     const std::string uuid = json_str(msg, "source_uuid");

@@ -9,8 +9,13 @@
 # Contents/Frameworks; this script is the single place that knows that.
 # (Hard-won in the CoreVideo OBS plugin mac port; see main-macos.mm's header.)
 #
+# Vendored from CoreVideo Pro main @ 219ca1db (scripts/make-macos-engine-bundle.sh).
+# Edge deltas: Edge bundle id / usage strings / version source, and the
+# --build-dir default layout (Edge's macOS build puts binaries at the build
+# root: build/engine/corevideo-zoom-engine). See native/zoom-engine/README.md.
+#
 # Usage:
-#   scripts/make-macos-engine-bundle.sh --build-dir native/build-engine [options]
+#   scripts/make-macos-engine-bundle.sh --build-dir build/engine [options]
 #
 #   --build-dir DIR   CMake build dir containing corevideo-zoom-engine (required)
 #   --out DIR         Where to write the .app (default: <build-dir>)
@@ -40,7 +45,7 @@ while [ $# -gt 0 ]; do
         --zoom-sdk)  ZOOM_SDK="$2";  shift 2 ;;
         --sign)      SIGN_ID="$2";   shift 2 ;;
         --link-sdk)  LINK_SDK=1;     shift ;;
-        -h|--help)   sed -n '2,26p' "$0"; exit 0 ;;
+        -h|--help)   sed -n '2,31p' "$0"; exit 0 ;;
         *) echo "error: unknown argument '$1'" >&2; exit 2 ;;
     esac
 done
@@ -51,7 +56,8 @@ done
     echo "       corevideo-zoom-engine target first)" >&2; exit 2; }
 OUT_DIR="${OUT_DIR:-$BUILD_DIR}"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="$(node -p "require('$SRC_DIR/package.json').version" 2>/dev/null || echo 0.0.0)"
+VERSION="$(sed -n 's/^project(CoreVideoEdge VERSION \([0-9.]*\).*/\1/p' "$SRC_DIR/native/CMakeLists.txt" | head -1)"
+VERSION="${VERSION:-0.0.0}"
 
 APP="$OUT_DIR/$APP_NAME"
 rm -rf "$APP"
@@ -65,15 +71,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleExecutable</key><string>corevideo-zoom-engine</string>
-    <key>CFBundleIdentifier</key><string>us.iamfatness.corevideopro.zoom-engine</string>
+    <key>CFBundleIdentifier</key><string>us.iamfatness.corevideoedge.zoom-engine</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>corevideo-zoom-engine</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>12.0</string>
-    <key>NSCameraUsageDescription</key><string>CoreVideo Pro captures Zoom meeting video.</string>
-    <key>NSMicrophoneUsageDescription</key><string>CoreVideo Pro captures Zoom meeting audio.</string>
+    <key>NSCameraUsageDescription</key><string>CoreVideo Edge captures Zoom meeting video.</string>
+    <key>NSMicrophoneUsageDescription</key><string>CoreVideo Edge captures Zoom meeting audio.</string>
 </dict>
 </plist>
 PLIST
@@ -111,4 +117,4 @@ codesign --force --deep --sign "$SIGN_ID" "$APP" 2>/dev/null || \
 
 echo "bundle: $APP"
 echo "engine binary: $APP/Contents/MacOS/corevideo-zoom-engine"
-echo "Point the core at it with COREVIDEO_ZOOM_ENGINE_PATH=$APP/Contents/MacOS/corevideo-zoom-engine"
+echo "corevideo-edge in the same folder finds it by default; otherwise pass --engine $APP/Contents/MacOS/corevideo-zoom-engine"

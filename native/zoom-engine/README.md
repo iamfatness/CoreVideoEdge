@@ -94,8 +94,12 @@ rewrites above. Keep this engine standalone so it stays portable to this app.
 ## CoreVideo Edge vendoring (2026-11-08)
 
 Copied into CoreVideo Edge from `iamfatness/CoreVideoPro` main @ `8751b8d2`
-(`native/zoom-engine/`). The macOS engine (`main-macos.mm`) was not copied:
-Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt`.
+(`native/zoom-engine/`). Build wiring lives in Edge's `native/CMakeLists.txt`.
+
+The macOS engine `engine/main-macos.mm` and `scripts/make-macos-engine-bundle.sh`
+were added 2026-11-09 from CoreVideoPro main @ **`219ca1db`** (commit
+`f95925a` in Edge is the verbatim copy; blob hashes match Pro's). Its own
+deltas are the "macOS engine deltas" below.
 
 ### Edge deltas (keep this list exact when re-syncing from Pro)
 
@@ -127,6 +131,51 @@ Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt
    send every subscribed guest a continuous tone, which hid the defect that
    took down the first live take (2026-11-09). Default 0 = unchanged.
 
-Otherwise the fake engine is unmodified. Edge launches it with
+Otherwise the fake engine is unmodified.
+
+### macOS engine deltas (`engine/main-macos.mm`, from Pro @ `219ca1db`)
+
+Each is marked `Edge E<n>` in the source and listed in its header comment.
+They give the ObjC++ engine what Edge's Windows engine does and the node
+relies on:
+
+- **E1 capture-only join** (delta 1 above, macOS SDK): `isNoVideo` from
+  `"capture_only":true`, VoIP kept, own mic/camera muted through
+  `actionMeetingWithCmd:{MuteAudio,MuteVideo} userID:<self id>` (never 0) on
+  joining and on every audio/video status change; `self_user_unavailable`,
+  `meeting_keeps_unmuting` after 20.
+- **E2 ISO arrival ring**: `iso_video` command (`IsoVideoDemand`, cap 8) and a
+  per-source `<prefix><uuid>-iso` ring (`shared/iso-video-ring.h`) written on
+  every frame with a `steady_clock` capture stamp, released with the target.
+- **E3 fixed 1080p video regions** (`i420_region_capacity(kMaxVideoShmYLen)`),
+  as on Windows. Frames above 1080p are dropped with
+  `video_frame_exceeds_shm_capacity`, never truncated.
+- **E4 limited-range expansion** (`I420RangeNormalizer` +
+  `I420ContentRangeTracker`, `isLimitedI420`), uncropped frames only;
+  `COREVIDEO_ZOOM_RANGE_CORRECTION=0` turns the content tracker off.
+- **E5 command dispatch by JSON `cmd` value** (`ipc_command_is`) for every
+  command, including `quit`, `init`, `join`, `leave`, `start_media`,
+  `stop_media` (Pro's file matched substrings of the whole line).
+- **E6 same-account collision**: `onEndOtherMeetingToJoinMeetingNotification`
+  ends the other meeting only for `"end_other_meeting":true`, else cancels and
+  reports `join_failed` / `account-busy-elsewhere` (Windows #475).
+- The `sdk_runtime_missing` reason names `make-macos-engine-bundle.sh`.
+
+`scripts/make-macos-engine-bundle.sh` deltas: Edge bundle id
+(`us.iamfatness.corevideoedge.zoom-engine`) and usage strings, version read
+from `native/CMakeLists.txt` (Edge has no package.json), help text.
+
+Not ported, deliberately: Pro's `needCustomizedUI = NO` stays (the SDK's
+meeting window and a Dock icon appear on the Edge Mac, as the Windows engine
+shows its UI). Only the live Mac run can say whether breakout moves arrive as
+`Disconnecting/Ended` + `InMeeting` the way the node expects (Windows does).
+
+### Lifted node code deltas (`native/src/modules`)
+
+- `ZoomEngineProcess.cpp` (POSIX fork/exec only): the child gets stdin from
+  `/dev/null`, stdout redirected to stderr (stdout is the node's JSON
+  protocol; anything the SDK prints must not land there) and every other
+  descriptor closed before `execl`, the POSIX equivalent of Windows'
+  `bInheritHandles=FALSE`. Windows path unchanged. Edge launches it with
 `COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE=0` so it never streams a participant Edge
 did not explicitly subscribe.
