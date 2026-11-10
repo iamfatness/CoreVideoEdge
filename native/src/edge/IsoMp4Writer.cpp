@@ -242,7 +242,14 @@ bool IsoMp4Writer::finalize(std::int64_t minimumEnd100ns, std::string& error) {
   std::string firstError;
   // One common end for both tracks: the later of the two, and at least the
   // take's stop time. Video: the held last frame extends to it. Audio: silence.
-  const std::int64_t end = std::max({minimumEnd100ns, videoEnd100ns(), audioEnd100ns()});
+  std::int64_t end = std::max({minimumEnd100ns, videoEnd100ns(), audioEnd100ns()});
+  // Constant rate: the end is a grid point too, so the last sample lasts one
+  // slot and the file's average rate is exactly the grid's (AVAssetWriter
+  // files read 29.98 fps when the last sample ran to an off-grid stop time).
+  if (constantRate()) {
+    const std::int64_t fps = settings_.constantFps;
+    end = gridPts((end * fps + 9'999'999) / 10'000'000);
+  }
   if (constantRate() && !fillGridTo(gridIndex(end), firstError)) ok = false;
   if (ok && !flushPendingVideo(end, firstError)) ok = false;
   const std::int64_t rate = settings_.audioSampleRate;
