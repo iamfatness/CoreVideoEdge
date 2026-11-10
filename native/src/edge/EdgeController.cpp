@@ -20,7 +20,7 @@ constexpr auto kJoinTimeout = std::chrono::seconds(90);
 constexpr auto kEngineSilence = std::chrono::seconds(10);
 constexpr auto kReceivingWindow = std::chrono::seconds(3);
 constexpr auto kRoomMoveTimeout = std::chrono::seconds(90);
-// Zoom SDK MeetingStatus values (meeting_service_interface.h, SDK 7.0.5).
+// Zoom SDK MeetingStatus values (meeting_service_interface.h; unchanged in SDK 7.1.5).
 constexpr int kStatusReconnecting = 5;
 constexpr int kStatusJoinBreakout = 14;
 constexpr int kStatusLeaveBreakout = 15;

@@ -103,7 +103,7 @@ re-copy and re-apply the listed deltas. Do not edit lifted files casually.
 ## Build / test / prove
 
 ```powershell
-$env:ZOOM_SDK_DIR = 'C:\Users\walla\Downloads\zoom-sdk-windows-7.0.5.39292\zoom-sdk-windows-7.0.5.39292\x64'
+$env:ZOOM_SDK_DIR = 'C:\Users\walla\Downloads\zoom-sdk-windows-7.1.5.43953\zoom-sdk-windows-7.1.5.43953\x64'   # 7.1.5 since Comms (talkback)
 .\scripts\build.ps1                                   # Release, both test suites
 node scripts\validate-edge-iso.mjs --sources 6 --seconds 60
 ```

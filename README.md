@@ -49,7 +49,8 @@ for v1 (the relay sketched in `SPEC.md` is not implemented).
 Needs Visual Studio 2022+ with the C++ x64 tools, CMake 3.24+ and Ninja (both
 ship with Visual Studio), the .NET 9 SDK, and for the real engine the Zoom
 Meeting SDK for Windows. The SDK is **not** in git. Edge builds against the
-same SDK as Pro (7.0.5.39292).
+Meeting SDK **7.1.5.43953** (the talkback controller Comms needs;
+the OBS plugin and ZComms ship on it too). Pro is still on 7.0.5.
 
 ```powershell
 $env:ZOOM_SDK_DIR = 'C:\path\to\zoom-sdk-windows-7.0.5.39292\x64'   # folder with h\zoom_sdk.h and lib\sdk.lib

@@ -138,6 +138,14 @@ Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt
    fail (code 12), succeed at 720p and emit `video_resolution_downgraded`, the
    real engine's fallback. Default: always granted as asked.
 
+6. **Zoom Meeting SDK 7.1.5.43953** (build only). Edge builds the engine
+   against 7.1.5 (Pro @ `8751b8d2` is on 7.0.5) because Comms needs the
+   talkback controller. The vendored sources compiled and linked against
+   7.1.5 with no source change (2026-11-09: no new pure virtuals on any
+   interface the engine implements, MeetingStatus values unchanged). Raw
+   video/ISO re-proved with the fake validator only; a live 7.1.5 take is
+   still owed.
+
 Otherwise the fake engine is unmodified. Edge launches it with
 `COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE=0` so it never streams a participant Edge
 did not explicitly subscribe.

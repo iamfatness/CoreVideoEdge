@@ -4,7 +4,7 @@
   Zoom engine (real + fake), the operator app, and runs both test suites.
 
 .EXAMPLE
-  $env:ZOOM_SDK_DIR = 'C:\zoom-sdk-windows-7.0.5.39292\zoom-sdk-windows-7.0.5.39292\x64'
+  $env:ZOOM_SDK_DIR = 'C:\zoom-sdk-windows-7.1.5.43953\zoom-sdk-windows-7.1.5.43953\x64'
   .\scripts\build.ps1
 
 .EXAMPLE
