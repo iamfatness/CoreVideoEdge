@@ -77,6 +77,33 @@ public sealed record EdgeFeeds(
     bool? SrtEncrypted,
     IReadOnlyList<EdgeFeedSlot> Slots);
 
+// Comms: Zoom talkback from this node's own participant (docs/PROTOCOL.md
+// "Comms state"). Absent until the engine has reported comms at all.
+public sealed record EdgeCommsChannel(int Slot, string? Label, int Listeners, bool Ready, bool Keyed, bool Latched,
+    string? Room, int ReachOk, int ReachDark);
+
+public sealed record EdgeCommsPerson(uint ParticipantId, string Name, bool Talkback, string? Room, IReadOnlyList<int> Channels);
+
+public sealed record EdgeCommsMic(string? Device, IReadOnlyList<string> Devices, double? PeakDbfs, int GainDb, bool Sidetone,
+    string? SidetoneDevice, IReadOnlyList<string> SidetoneDevices, bool Tone);
+
+public sealed record EdgeComms(
+    bool Available,
+    string? Reason,
+    bool LampLink,
+    bool LampMeetingMic,
+    bool LampChannel,
+    bool LampTx,
+    string? Room,
+    IReadOnlyList<EdgeCommsChannel> Channels,
+    IReadOnlyList<EdgeCommsPerson> Roster,
+    EdgeCommsMic Mic,
+    long FramesSent,
+    long ChannelSends,
+    long Underruns,
+    long SendErrors,
+    IReadOnlyList<string> Log);
+
 public sealed record EdgeState
 {
     public long Seq { get; init; }
@@ -102,6 +129,7 @@ public sealed record EdgeState
     public EdgeRecordFormat? RecordFormat { get; init; } // v2
     public string? PreviewDir { get; init; }             // v2
     public EdgeFeeds? Feeds { get; init; }               // absent from nodes without feeds
+    public EdgeComms? Comms { get; init; }               // absent until the engine reports comms
     public IReadOnlyList<EdgeParticipant>? Participants { get; init; }  // null: roster not known
     public IReadOnlyList<EdgeSubscription> Subscriptions { get; init; } = [];
     public bool Recording { get; init; }
@@ -222,6 +250,42 @@ public sealed record EdgeState
                 (int?)LN(fd, "srtLatencyMs"), BN(fd, "srtEncrypted"), slots);
         }
 
+        EdgeComms? comms = null;
+        if (root.TryGetProperty("comms", out var cm) && cm.ValueKind == JsonValueKind.Object)
+        {
+            static JsonElement Obj(JsonElement e, string name) =>
+                e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Object ? v : default;
+            static bool OB(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && B(e, name);
+            var lamps = Obj(cm, "lamps");
+            var mic = Obj(cm, "mic");
+            var stats = Obj(cm, "stats");
+            var chans = cm.TryGetProperty("channels", out var ca) && ca.ValueKind == JsonValueKind.Array
+                ? ca.EnumerateArray().Select(c => new EdgeCommsChannel(
+                    (int)L(c, "slot"), SN(c, "label"), (int)L(c, "listeners"), B(c, "ready"), B(c, "keyed"), B(c, "latched"),
+                    SN(c, "room"), (int)L(c, "reachOk"), (int)L(c, "reachDark"))).ToList()
+                : new List<EdgeCommsChannel>();
+            var roster = cm.TryGetProperty("roster", out var ra) && ra.ValueKind == JsonValueKind.Array
+                ? ra.EnumerateArray().Select(r => new EdgeCommsPerson(
+                    (uint)L(r, "participantId"), S(r, "name"), B(r, "talkback"), SN(r, "room"),
+                    r.TryGetProperty("channels", out var rc) && rc.ValueKind == JsonValueKind.Array
+                        ? rc.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Number).Select(x => x.GetInt32()).ToList()
+                        : new List<int>())).ToList()
+                : new List<EdgeCommsPerson>();
+            var hasMic = mic.ValueKind == JsonValueKind.Object;
+            var hasStats = stats.ValueKind == JsonValueKind.Object;
+            comms = new EdgeComms(
+                B(cm, "available"), SN(cm, "reason"),
+                OB(lamps, "link"), OB(lamps, "meetingMic"), OB(lamps, "channel"), OB(lamps, "tx"),
+                SN(cm, "room"), chans, roster,
+                new EdgeCommsMic(
+                    hasMic ? SN(mic, "device") : null, hasMic ? Strings(mic, "devices") : [],
+                    hasMic ? DN(mic, "peakDbfs") : null, hasMic ? (int)L(mic, "gainDb") : 0, OB(mic, "sidetone"),
+                    hasMic ? SN(mic, "sidetoneDevice") : null, hasMic ? Strings(mic, "sidetoneDevices") : [], OB(mic, "tone")),
+                hasStats ? L(stats, "framesSent") : 0, hasStats ? L(stats, "channelSends") : 0,
+                hasStats ? L(stats, "underruns") : 0, hasStats ? L(stats, "sendErrors") : 0,
+                Strings(cm, "log"));
+        }
+
         return new EdgeState
         {
             Seq = L(root, "seq"),
@@ -247,6 +311,7 @@ public sealed record EdgeState
             RecordFormat = format,
             PreviewDir = SN(root, "previewDir"),
             Feeds = feeds,
+            Comms = comms,
             Participants = participants,
             Subscriptions = subscriptions,
             Recording = recording,

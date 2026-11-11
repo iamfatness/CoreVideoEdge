@@ -15,8 +15,8 @@ namespace CoreVideoEdge.Desktop;
 internal static class Headless
 {
     private const string Usage =
-        "usage: CoreVideoEdge --screenshot <state.json> <connect|routing|monitor|record> <out.png> " +
-        "[--preview-dir <dir>] [--signed-in] [--sign-in-pending] [--meeting-link <text>] [--size WxH] [--state-age <s>]";
+        "usage: CoreVideoEdge --screenshot <state.json> <connect|routing|monitor|record|comms> <out.png> " +
+        "[--preview-dir <dir>] [--signed-in] [--sign-in-pending] [--meeting-link <text>] [--size WxH] [--state-age <s>] [--comms-edit] [--comms-settings]";
 
     // --screenshot: apply a CAPTURED node state line and render one screen.
     public static int Screenshot(string[] args)
@@ -26,7 +26,7 @@ internal static class Headless
         if (!Enum.TryParse<Screen>(args[1], ignoreCase: true, out var screen)) { Console.Error.WriteLine(Usage); return 2; }
         var outPath = args[2];
         string? previewDir = null, meetingLink = null;
-        bool signedIn = false, pending = false;
+        bool signedIn = false, pending = false, commsEdit = false, commsSettings = false;
         int width = 1280, height = 800;
         double stateAge = 0;
         for (var i = 3; i < args.Length; ++i)
@@ -36,6 +36,8 @@ internal static class Headless
                 case "--preview-dir": previewDir = args[++i]; break;
                 case "--signed-in": signedIn = true; break;
                 case "--sign-in-pending": pending = true; break;
+                case "--comms-edit": commsEdit = true; break;
+                case "--comms-settings": commsSettings = true; break;
                 case "--meeting-link": meetingLink = args[++i]; break;
                 case "--state-age": stateAge = double.Parse(args[++i], CultureInfo.InvariantCulture); break;
                 case "--size":
@@ -59,6 +61,8 @@ internal static class Headless
             vm.Monitor.PreviewDirOverride = previewDir;
             vm.Apply(state);
             vm.SelectedScreen = screen;
+            vm.Comms.EditMode = commsEdit;
+            vm.Comms.SettingsOpen = commsSettings;
             var window = new MainWindow { DataContext = vm, Width = width, Height = height };
             window.Show();
             for (var i = 0; i < 4; ++i)

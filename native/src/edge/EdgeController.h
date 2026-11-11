@@ -78,6 +78,7 @@ class EdgeController {
   std::string cmdEngine(const rpc::Json& c);
   std::string cmdRecordFormat(const rpc::Json& c);
   std::string cmdSetFeeds(const rpc::Json& c);
+  std::string cmdComms(const std::string& cmd, const rpc::Json& c);
   void resubscribeAll();
 
   void fail(const std::string& message);
@@ -147,6 +148,10 @@ class EdgeController {
   std::vector<IsoSourceHealth> lastTakeHealth_;
   std::chrono::steady_clock::time_point lastDiskCheck_{};
   std::string diskWarning_;
+
+  // Comms: the engine's last comms_state in node shape (CommsRelay). Absent
+  // until the engine reports; dropped whenever the engine stops.
+  std::optional<rpc::Json> comms_;
 
   bool dirty_ = true;
   mutable std::uint64_t stateSeq_ = 0;

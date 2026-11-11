@@ -20,6 +20,21 @@ file in the same change as any substantive work.
   rate** (Source / 30 / 60, `set-fps`) for that slot's ISO and SRT feed; the
   Record tab no longer has a rate. Delivered size shows once, under the slot
   header. Monitor tiles scale to fit the window (`MonitorView.BestItemWidth`).
+- 2026-11-09 night (owner): **Comms** -- the ZComms talkback station folded
+  into Edge (and later Pro) in our look. Slice 1 (engine + node, this repo):
+  Zoom SDK 7.1.5, talkback inside the Zoom engine (`engine-comms`, ported
+  ZComms under `native/zoom-engine/engine/comms/`), fake emulation, node verbs
+  `comms-*` and the `comms` state object (`docs/PROTOCOL.md`). Spec:
+  `docs/superpowers/specs/2026-11-09-comms-design.md`. Needs this node's Zoom
+  account to be host or co-host; video never depends on it.
+  App (slice 2): `CommsView` /
+  `CommsViewModel` (fifth tab, Ctrl+5): a cell IS a talk key (`TalkKey`:
+  press = key down, release/capture-lost = key up, Space/Enter bubble), ALL
+  CALL, Latch, Edit talent (16 chips), Settings drawer, lamps, one-line ops
+  strip; digits 1-9 / Space panel-scoped, released on window deactivate or
+  leaving the tab. Cells/people rebuild only on a structure signature change
+  (ZComms law: rebuilding under a press eats the release). On air = Live
+  fill; red stays exclusive to recording.
 - Still out: compositor, scenes, graphics, program output, streaming, virtual
   camera. Never downgrade resolution automatically to fit more people on one
   node: 1080p unless the operator explicitly picks 720p/360p for a slot.
@@ -37,7 +52,9 @@ file in the same change as any substantive work.
 - `corevideo-edge-ndi-probe.exe`: receives a named NDI source like Pro's NDI
   input does; used by the validator.
 - `corevideo-zoom-engine.exe` / `-fake.exe` (`native/zoom-engine/`): Pro's
-  engine, vendored. I420 + audio rings in shared memory.
+  engine, vendored. I420 + audio rings in shared memory. Since Comms it is
+  also the talkback station (README deltas 7/8): the comms core is shared by
+  the real and fake engines so both run the same ladder.
 
 ## Laws learned 2026-11-09 (v2 day)
 
@@ -91,6 +108,52 @@ file in the same change as any substantive work.
   scripted edits with backslashes in a file written by the Write tool, or use
   Edit.
 
+## Laws learned 2026-11-09 (Comms slice 1)
+
+- **The engine's command dispatch is substring matching** (`line.find("join")`,
+  `"quit"`, `"leave"`). Any new verb that carries free text (device names)
+  must be routed BEFORE it, by exact command name (`comms_protocol.h`).
+- **The real mic can never be open to the room.** Talkback is SILENT while
+  our mic is muted (ZComms law 1), so Comms opens it -- but only behind a
+  never-fed virtual mic, and `setExternalAudioSource` returning SUCCESS proves
+  nothing: without the raw-data licence it can succeed and do nothing
+  (ZComms). So: require `HasRawdataLicense()`; after the install the mic
+  stays MUTED and un-owned until the virtual mic reports `onMicInitialize`
+  -- only then does capture-only stand down and the engine unmute (owner
+  ruling 2026-11-09: not even a 1.5 s window was acceptable). No init within
+  5 s: stay muted, give up for the meeting, `comms.reason` says the virtual
+  mic never initialised. Any later drop (`onMicUninitialized`, flag false)
+  clears ownership FIRST then `MuteAudio(self)` at once. All of it lives in
+  `comms/mic_guard` (pure, tested); the engine only performs. Never "fix" a
+  closed mic by unmuting.
+- **Mic ownership is cleared synchronously on every meeting status change**
+  (`EngineComms::on_meeting_status`, first line of `onMeetingStatusChanged`).
+  A tick-driven reset left `owns_mic()` true across a fast leave/rejoin, so
+  the attach-time capture-only mute was skipped. MEETING_STATUS_LOCKED/
+  UNLOCKED fire while still in the meeting: ignore them.
+- **A non-capture-only join is never given a virtual mic or unmuted** (Pro's
+  operator speaks in the meeting); Comms only reports their mute.
+- **A held talk key needs an owner.** stdin EOF quits the node, which sends
+  `comms_release_all` first; `comms-key` `leaseMs` covers a hung-but-alive
+  app.
+- **Only one listener per SDK controller.** `EngineParticipants` owns the
+  participants controller's event slot; Comms polls the roster (1 s). Never
+  `SetEvent` a second listener on a controller something else owns.
+- **Auto-assign waits for the bank to form.** Assigning while
+  `CreateChannel(16)` answers trickle in piled every guest onto channel 1
+  (fake probe). All 16, or 5 s without growth.
+- **Device enumeration and WASAPI opens never run on the SDK thread** (it is
+  the thread video callbacks and the command loop share). They run on the
+  comms audio worker; the SDK thread only does quick getters and the
+  talkback calls.
+- **The meter must not drive the state line**: `CommsStateEmitter` sends a
+  meter-only change at most every 250 ms; anything else at once.
+- **A range-for over `json().get(..)->asArray()` on a temporary `Json`
+  dangles** (the array lease dies with the temporary). Keep the tree in a
+  local first.
+- **`IsoMp4WriterTest` line 220 is timing-flaky** (121 vs 120 frames, about
+  1 run in 3 on this box, seen before any Comms code). Untriaged.
+
 ## Lifted code: keep it lifted
 
 `native/src/modules|core|rpc`, `native/zoom-engine/`, `app/CoreVideoEdge.Core/Lifted`
@@ -103,10 +166,15 @@ re-copy and re-apply the listed deltas. Do not edit lifted files casually.
 ## Build / test / prove
 
 ```powershell
-$env:ZOOM_SDK_DIR = 'C:\Users\walla\Downloads\zoom-sdk-windows-7.0.5.39292\zoom-sdk-windows-7.0.5.39292\x64'
+$env:ZOOM_SDK_DIR = 'C:\Users\walla\Downloads\zoom-sdk-windows-7.1.5.43953\zoom-sdk-windows-7.1.5.43953\x64'   # 7.1.5 since Comms (talkback)
 .\scripts\build.ps1                                   # Release, both test suites
 node scripts\validate-edge-iso.mjs --sources 6 --seconds 60
+node scripts\probe-comms.mjs                          # Comms through node + fake (key/assign/tone/latch)
 ```
+
+On the dev box `scripts\build.ps1` fails on vcvars stderr; build from a
+`.cmd` that calls `vcvars64.bat >nul 2>nul`, then `cmake -G Ninja` +
+`cmake --build`.
 
 Ninja single-config: `build\bin\*.exe` is always the build you just made. The
 app renders screens without a window:
@@ -166,6 +234,16 @@ screenshot after a UI change. Never drive the desktop; use the control API or th
   `EngineSupervisor` forces it off for every child.
 
 ## Not yet verified (be honest about it)
+
+- **Comms against real Zoom: nothing.** The real engine compiles and links on
+  SDK 7.1.5; the talkback path, the silent virtual mic (above all: does
+  `onMicInitialize` arrive within 5 s of the install while we are still
+  MUTED? If the SDK only initialises it once audio flows, the guard never
+  unmutes and `comms.reason` says the virtual mic never initialised -- the
+  live gate decides), unmute under capture-only, channel creation as co-host, delivery to a desktop guest, the
+  duck, breakout moves (channel re-creation vs the 16 cap) and raw video/ISO
+  on 7.1.5 in a live meeting are all unproven. Only the fake (unit tests,
+  probe, validator) has run.
 
 - Live A/V skew (there is no clap in a real meeting) and long live soaks. A live
   6-ISO 60 s take passed 2026-11-09 (signed-in join, raw data granted, 0 lost).

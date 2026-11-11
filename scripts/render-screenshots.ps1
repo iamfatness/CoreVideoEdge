@@ -62,7 +62,12 @@ try {
     @('record-armed', 'in-meeting', 'record', @('--signed-in')),
     @('record-engine-off', 'engine-off', 'record', @('--signed-in')),
     @('record-recording', 'recording', 'record', @('--signed-in')),
-    @('record-saved', 'saved', 'record', @('--signed-in'))
+    @('record-saved', 'saved', 'record', @('--signed-in')),
+    # Comms states: node scripts\capture-comms-fixtures.mjs (fake engine talkback).
+    @('comms-desk', 'comms', 'comms', @('--signed-in')),
+    @('comms-edit-settings', 'comms', 'comms', @('--signed-in', '--comms-edit', '--comms-settings')),
+    @('comms-not-host', 'comms-not-host', 'comms', @('--signed-in')),
+    @('comms-not-joined', 'idle', 'comms', @('--signed-in'))
   )
   foreach ($s in $shots) {
     $name, $state, $screen, $extra = $s

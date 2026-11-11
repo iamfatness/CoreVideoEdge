@@ -97,6 +97,12 @@ Copied into CoreVideo Edge from `iamfatness/CoreVideoPro` main @ `8751b8d2`
 (`native/zoom-engine/`). The macOS engine (`main-macos.mm`) was not copied:
 Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt`.
 
+**Comms files are shared with CoreVideo Pro byte-for-byte** (Pro branch
+`codex/comms-talkback`, ported from Edge `28c06bc`): `engine/engine-comms.{h,cpp}`,
+`engine/comms/**`, `fake/fake-comms.{h,cpp}`, `third_party/miniaudio/miniaudio.h`.
+Fix them in one repo and copy to the other. `main.cpp` / `fake/fake-engine.cpp`
+differ between the apps; only the Comms hooks (delta 7) must match.
+
 ### Edge deltas (keep this list exact when re-syncing from Pro)
 
 1. **Capture-only join** (`engine/main.cpp`). The `join` command accepts
@@ -137,6 +143,119 @@ Edge v1 is Windows x64 only. Build wiring lives in Edge's `native/CMakeLists.txt
    like the real engine. `COREVIDEO_FAKE_REFUSE_1080=1` makes a 1080p subscribe
    fail (code 12), succeed at 720p and emit `video_resolution_downgraded`, the
    real engine's fallback. Default: always granted as asked.
+
+6. **Zoom Meeting SDK 7.1.5.43953** (build only). Edge builds the engine
+   against 7.1.5 (Pro @ `8751b8d2` is on 7.0.5) because Comms needs the
+   talkback controller. The vendored sources compiled and linked against
+   7.1.5 with no source change (2026-11-09: no new pure virtuals on any
+   interface the engine implements, MeetingStatus values unchanged). Raw
+   video/ISO re-proved with the fake validator only; a live 7.1.5 take is
+   still owed.
+
+7. **Comms: Zoom talkback in the engine** (`engine/engine-comms.{h,cpp}`,
+   `engine/comms/` ported from ZComms @ `168a572`, listed in
+   `engine/comms/PORTED.md`; `engine/main.cpp` wiring). The talkback station
+   is this participant (the SDK is one participant per process). New P2E
+   lines `comms_key`, `comms_latch`, `comms_assign`, `comms_mic`,
+   `comms_sidetone_out`, `comms_sidetone`, `comms_tone`, `comms_gain`; new
+   E2P `comms_state` (<= 10 Hz, only on change). Schema: Edge
+   `docs/PROTOCOL.md` "Comms". `main.cpp` changes, all marked "delta 7":
+   - comms_* lines are routed BEFORE the existing dispatch, which matches
+     `quit`/`join`/`leave` as substrings (a device name could hold one);
+   - `EngineComms::start()` before the command loop sets a 100 ms thread
+     timer that the loop's own message pump dispatches; everything Comms does
+     with the SDK runs on that thread;
+   - `EngineComms::shutdown()` runs after the heartbeat stops and before
+     `Leave`/`CleanUPSDK()`: the bank is released, the audio worker and the
+     TX pacer thread are joined, the silent mic removed;
+   - `onMeetingStatusChanged` calls `EngineComms::on_meeting_status()`
+     FIRST, on every status: mic ownership is dropped synchronously (so
+     `attach()`'s capture-only mute applies on re-entry even when a leave/
+     rejoin or reconnect lands between two ticks) and, away from INMEETING
+     (LOCKED/UNLOCKED excepted: those fire while still in the meeting), the
+     bank is released at once so the TX pacer can never reach a controller
+     the SDK is tearing down;
+   - the join handler passes `capture_only` to `EngineComms::set_capture_only()`;
+   - **delta 1 changes**: `enforce_capture_only()` does not count our mic as
+     "open" while `EngineComms::owns_mic()`. Ownership is decided by
+     `comms/mic_guard` (pure, unit-tested) under one rule: **the real mic can
+     never be open to the room**. Only for a capture-only join, only when the
+     station can run talkback (in meeting, controller, supported,
+     host/co-host), and only with `HasRawdataLicense()` (without it ZComms
+     found `setExternalAudioSource` can succeed and do nothing), the engine
+     installs a never-fed virtual mic and then WAITS, still muted and not
+     owning, for the virtual mic's `onMicInitialize`. Only then does it own
+     the mic (capture-only stands down) and unmute (`UnMuteAudio(<self id>)`,
+     re-asserted every 2 s). No `onMicInitialize` within 5 s: the mic stays
+     muted, nothing is owned, Comms gives up for that meeting and the state
+     reason says the virtual mic never initialised (if the SDK only
+     initialises it once audio flows, that is what the live gate will show).
+     Once owned, any drop (`onMicUninitialized` -- acted on inside the
+     callback -- or the flag going false) clears ownership FIRST and sends
+     `MuteAudio(<self id>)` at once, and Comms gives up for the meeting.
+     A synchronous install refusal exposes nothing and is retried every 5 s
+     (logged once). A join that is NOT capture-only (Pro's operator who
+     speaks) is never touched: no virtual mic, no unmute; the ops log says
+     when their own mute silences talkback. The camera rule is unchanged;
+   - `comms_release_all` drops every held key and ALL CALL (latches stay);
+     `comms_key` takes an optional `lease_ms` after which an unrefreshed hold
+     drops by itself; the node sends `comms_release_all` before quitting
+     (its stdin closing -- the app gone -- quits it);
+   - `comms_state` change detection ignores the meter (`CommsStateEmitter`):
+     a meter-only change goes out at most every 250 ms;
+   - shutdown waits at most 3 s for the comms audio worker (a stuck WASAPI
+     driver is leaked, not allowed to hang quit).
+   The ZComms laws carried over (each enforced in `comms/comms_core.cpp` or
+   the ported `TalkbackChannels`/`DuckPlanner`):
+   - L1 talkback delivers only while our meeting mic is OPEN (above; MTG MIC
+     lamp = `lamps.meeting_mic`) -- and the real mic is never open to the
+     room (mic_guard);
+   - L2 talkback does not cross breakout rooms -- NOT handled this slice: no
+     room tracking, reach counts everyone as reachable;
+   - L3 same-account host collision: already answered by
+     `EngineConfigurationEvent` (#475);
+   - L4 Zoom ducks channel members by default: unity at creation, duck (0.2)
+     only while a channel is keyed AND the voice gate is open, one paced
+     `SetChannelBackgroundVolume` per 300 ms;
+   - L5 sends are MONO only (the SDK seam hardcodes mono);
+   - the bank is ONE `CreateChannel(16)`; re-asked every 10 s only while
+     nothing was granted; a partial grant is kept;
+   - membership heals ONE call per 600 ms pass, rotated across channels, with
+     per-(channel,person) backoff 5 s doubling to 60 s and 10 s patience after
+     a successful invite; ALREADY_EXIST = present;
+   - auto-assign (each eligible person their own channel, spillover to the
+     least loaded) waits until the bank finished forming (16, or 5 s without
+     growth) -- assigning while channels arrive piled everyone onto channel 1;
+   - `IsSupportTalkback()==false` (web client) is reported, never invited,
+     and its intent pruned; intent for people who left is pruned (ids recycle);
+   - the roster is POLLED (1 s): `EngineParticipants` owns the participants
+     controller's only event slot;
+   - mic chain (miniaudio capture, gain, limiter, PTT envelope, sidetone, 20 ms
+     pacer) on its own worker thread; enumeration (5 s) and device opens never
+     run on the SDK thread. A missing sidetone output falls back to no
+     sidetone instead of failing the talk path;
+   - every tick and command is exception-fenced; nothing here calls into
+     EngineVideo/EngineAudio/EngineShare.
+   Not ported this slice: AEC (speexdsp), extern feeds, chat cues, breakout
+   awareness and station-room moves, `roster.cpp` (replaced by polling),
+   `talkback_source` (the single-channel spike). After a breakout move the
+   engine sees `left` + `joined` and re-requests the bank; whether the
+   previous room's channels count against Zoom's 16 cap is UNVERIFIED.
+   TalkbackSdkWin adapters are parked (never freed) after each meeting so a
+   late SDK callback can never hit a freed sink.
+
+8. **Comms in the fake engine** (`fake/fake-comms.{h,cpp}`, wiring in
+   `fake/fake-engine.cpp`). Runs the SAME `comms_core` over a scripted
+   TalkbackSdk: channels answer ~1.2 s after `CreateChannel(16)`, invites
+   and removals confirm after ~0.4 s, every guest supports talkback except
+   one "web client" guest (default the last baseline guest;
+   `COREVIDEO_FAKE_WEB_CLIENT_ID=<id>`, 0 = none) whose invite would be
+   refused with code 3; a 50 Hz synthetic mic feeds the shared bank sink
+   (keyed -> `channel_sends` rise; the peak moves while keyed or TONE is on,
+   -60 dBFS otherwise; an unknown mic name withdraws the meter and says so).
+   `COREVIDEO_FAKE_COMMS_ROLE=attendee` and
+   `COREVIDEO_FAKE_COMMS_UNSUPPORTED=1` exercise the unavailable states.
+   comms_* lines are routed before the substring dispatch, as in delta 7.
 
 Otherwise the fake engine is unmodified. Edge launches it with
 `COREVIDEO_FAKE_ENGINE_AUTOSUBSCRIBE=0` so it never streams a participant Edge

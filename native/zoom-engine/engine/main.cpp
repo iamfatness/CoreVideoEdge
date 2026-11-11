@@ -4,6 +4,7 @@
 #include "iso-video-demand.h"
 #include "engine-share.h"
 #include "engine-audio.h"
+#include "engine-comms.h"  // CoreVideo Edge delta 7
 #include <zoom_sdk.h>
 #include <auth_service_interface.h>
 #include <setting_service_interface.h>
@@ -516,7 +517,10 @@ public:
             return;
         }
         const unsigned int my_id = me->GetUserID();
-        const bool mic_open = me->GetAudioJoinType() != ZOOMSDK::AUDIOTYPE_NONE && !me->IsAudioMuted();
+        // Delta 7: while Comms owns the mic (silent virtual mic installed),
+        // our open mic is silent to the room and talkback needs it open.
+        const bool mic_open = !EngineComms::owns_mic() &&
+                              me->GetAudioJoinType() != ZOOMSDK::AUDIOTYPE_NONE && !me->IsAudioMuted();
         const bool camera_on = me->IsVideoOn();
         if (!mic_open && !camera_on) return;
         // Bounded: a meeting policy that keeps forcing us live must surface as
@@ -1178,6 +1182,8 @@ public:
 #endif
 
     void onMeetingStatusChanged(ZOOMSDK::MeetingStatus status, int iResult) override {
+        // Delta 7: before anything below (attach() enforces capture-only).
+        EngineComms::instance().on_meeting_status(static_cast<int>(status));
         EngineIpc::write(R"({"cmd":"debug","stage":"meeting_status","status":)" +
             std::to_string(static_cast<int>(status)) +
             R"(,"result":)" + std::to_string(iResult) + "}");
@@ -1459,6 +1465,9 @@ int main(int argc, char **argv)
     std::atomic<bool> running{true};
     std::string line;
 
+    // CoreVideo Edge delta 7: Zoom talkback, ticked from this thread's pump.
+    EngineComms::instance().start(&meeting_svc);
+
     // Heartbeat: emit a ping every ~2s so the plugin can detect a hung-but-alive
     // engine (process running, pipe silent). Stop the loop if a write fails.
     std::thread heartbeat([&running]() {
@@ -1477,6 +1486,10 @@ int main(int argc, char **argv)
         if (!ipc_read_line(p2e, line)) break; // EOF or connection closed
 #endif
         if (line.empty()) continue;
+
+        // Delta 7: comms_* lines first -- the dispatch below matches "quit",
+        // "join" and "leave" as substrings, and a device name may hold one.
+        if (EngineComms::instance().handle_line(line)) continue;
 
         if (line.find(IPC_CMD_QUIT) != std::string::npos) {
             running = false;
@@ -1571,6 +1584,7 @@ int main(int argc, char **argv)
             const bool capture_only =
                 line.find("\"capture_only\":true") != std::string::npos;
             participants.set_capture_only(capture_only);
+            EngineComms::instance().set_capture_only(capture_only);  // delta 7
             if (display_name.empty()) display_name = "CoreVideo Pro";
             EngineIpc::write(R"({"cmd":"debug","stage":"join_received","meeting_id":")" +
                 json_escape(meeting_id) + R"(","capture_only":)" +
@@ -1699,6 +1713,10 @@ int main(int argc, char **argv)
     // Stop the heartbeat before tearing down the SDK / IPC.
     running.store(false, std::memory_order_release);
     if (heartbeat.joinable()) heartbeat.join();
+
+    // Delta 7: talkback threads (audio worker, TX pacer) are joined and the
+    // silent mic removed while the SDK is still fully alive.
+    EngineComms::instance().shutdown();
 
     if (meeting_svc) meeting_svc->Leave(ZOOMSDK::LEAVE_MEETING);
 

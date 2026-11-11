@@ -57,6 +57,9 @@ bool EngineSupervisor::start(const std::string& executablePath, Sink sink, std::
             notice.meetingStatus = static_cast<int>(status->asNumber());
         }
       }
+      // Comms (engine README delta 7): the talkback station's state. Unknown
+      // to Pro's parser, so the line itself rides along.
+      if (notice.event.command == "comms_state") notice.comms = rpc::Json::parse(*line);
       sink(std::move(notice));
     }
   });

@@ -7,6 +7,7 @@
 
 #include "modules/ZoomEngineClient.h"
 #include "modules/ZoomEngineProcess.h"
+#include "rpc/Json.h"
 
 #include <atomic>
 #include <cstdint>
@@ -25,6 +26,7 @@ struct EngineNotice {
   modules::ZoomEngineEvent event;
   std::string reason;            // Exited: why the pipe closed
   std::optional<int> meetingStatus;  // Debug meeting_status: the SDK MeetingStatus value
+  std::optional<rpc::Json> comms;    // comms_state: the whole line (the lifted parser does not know it)
 };
 
 class EngineSupervisor {
