@@ -176,6 +176,13 @@ On the dev box `scripts\build.ps1` fails on vcvars stderr; build from a
 `.cmd` that calls `vcvars64.bat >nul 2>nul`, then `cmake -G Ninja` +
 `cmake --build`.
 
+Betas: `scripts\package-release.ps1 -TestInstaller` (README "Windows beta").
+Run it from PowerShell, not Git Bash (Bash drops `ProgramFiles(x86)`, so
+vswhere/NSIS discovery fails). It works around the vcvars-stderr failure
+above itself. `corevideo://` is shared with CoreVideo Pro (HKCU, registered at
+sign-in by whichever app signed in last): Edge belongs on its own machine, and
+the uninstaller removes the key only while it points at the Edge install.
+
 Ninja single-config: `build\bin\*.exe` is always the build you just made. The
 app renders screens without a window:
 `CoreVideoEdge.exe --screenshot <state.json> <screen> <out.png> [--preview-dir <dir>]`
