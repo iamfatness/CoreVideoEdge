@@ -73,6 +73,32 @@ Outputs: `build\bin\corevideo-edge.exe`, `corevideo-zoom-engine.exe` (with the
 SDK runtime copied beside it), `corevideo-zoom-engine-fake.exe`;
 `app\CoreVideoEdge.Desktop\bin\x64\Release\net9.0\CoreVideoEdge.exe`.
 
+## Windows beta (installer + GitHub pre-release)
+
+```powershell
+$env:ZOOM_SDK_DIR = '...\zoom-sdk-windows-7.1.5.43953\x64'
+.\scripts\package-release.ps1 -TestInstaller     # clean tree required
+```
+
+Builds everything in Release, runs both test suites, publishes the app
+self-contained (the Edge machine needs no .NET install), stages it with the
+node, engines and Zoom SDK runtime, and gates the staged folder (node
+`--version`, node + fake engine answer `state`, app renders Routing
+headlessly). It writes `out\release\<releaseId>\`: the zip, an unsigned NSIS
+`Setup.exe` (per-user, `%LOCALAPPDATA%\Programs\CoreVideoEdge`, Start menu
+shortcut, installs the VC++ runtime only if it is missing), `.sha256` files and
+`build-manifest.json`. `-TestInstaller` also installs silently into a scratch
+folder, re-runs the gates on the installed copy, uninstalls and checks nothing
+is left; it refuses to run where Edge is already installed.
+
+Release id `beta-YYYY-MM-DD-<sha7>`. Publish: push the tag, then
+`gh release create <id> --prerelease --title "CoreVideo Edge <id>" --notes-file <notes>`
+with the five files. Never publish the `sdk-assets` draft.
+
+Not in the package: the NDI runtime (NDI feeds; install NDI 6 Runtime/Tools)
+and FFmpeg (SRT feeds; on `PATH` or `COREVIDEO_FFMPEG_DIR`). Uninstalling keeps
+settings and sign-in (`%LOCALAPPDATA%\CoreVideoEdge`) and recordings.
+
 ## Prove it end to end (no meeting, no desktop)
 
 `validate-edge-iso.mjs` drives `corevideo-edge.exe` only through its control
